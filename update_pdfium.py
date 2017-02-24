@@ -36,8 +36,10 @@ MAKE_FILES = ["third_party/pdfiumopenjpeg.mk",
               "fpdfsdk/pdfium.mk",
               "fpdfsdk/Android.mk"]
 
+OWNERS_FILES = ["OWNERS", "docs/OWNERS", "third_party/base/numerics/OWNERS"]
+
 COPY_FILES = [os.path.basename(__file__), ".git", "MODULE_LICENSE_BSD", "NOTICE"] + MAKE_FILES
-REMOVE_FILES = [os.path.basename(__file__), ".git", ".gitignore"]
+REMOVE_FILES = [os.path.basename(__file__), ".git", ".gitignore"] + OWNERS_FILES
 
 def getStableChromiumVersion():
    """ :return the latest chromium version """
