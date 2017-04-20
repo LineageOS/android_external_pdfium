@@ -1,0 +1,45 @@
+cc_library_static {
+    name: "libpdfiumfxcodec",
+    defaults: ["pdfium-defaults"],
+
+    cflags: [
+        "-DOPJ_STATIC",
+        "-DV8_DEPRECATION_WARNINGS",
+        "-D_CRT_SECURE_NO_WARNINGS",
+
+        // Mask some warnings. These are benign, but we probably want to fix them
+        // upstream at some point.
+        "-Wno-sign-compare",
+        "-Wno-pointer-to-int-cast",
+        "-Wno-unused-parameter",
+    ],
+
+    shared_libs: ["libz"],
+
+    srcs: [
+        "src/fxcodec/codec/fx_codec.cpp",
+        "src/fxcodec/codec/fx_codec_fax.cpp",
+        "src/fxcodec/codec/fx_codec_flate.cpp",
+        "src/fxcodec/codec/fx_codec_icc.cpp",
+        "src/fxcodec/codec/fx_codec_jbig.cpp",
+        "src/fxcodec/codec/fx_codec_jpeg.cpp",
+        "src/fxcodec/codec/fx_codec_jpx_opj.cpp",
+        "src/fxcodec/jbig2/JBig2_ArithDecoder.cpp",
+        "src/fxcodec/jbig2/JBig2_ArithIntDecoder.cpp",
+        "src/fxcodec/jbig2/JBig2_BitStream.cpp",
+        "src/fxcodec/jbig2/JBig2_Context.cpp",
+        "src/fxcodec/jbig2/JBig2_GrdProc.cpp",
+        "src/fxcodec/jbig2/JBig2_GrrdProc.cpp",
+        "src/fxcodec/jbig2/JBig2_GsidProc.cpp",
+        "src/fxcodec/jbig2/JBig2_HtrdProc.cpp",
+        "src/fxcodec/jbig2/JBig2_HuffmanDecoder.cpp",
+        "src/fxcodec/jbig2/JBig2_HuffmanTable.cpp",
+        "src/fxcodec/jbig2/JBig2_Image.cpp",
+        "src/fxcodec/jbig2/JBig2_PatternDict.cpp",
+        "src/fxcodec/jbig2/JBig2_PddProc.cpp",
+        "src/fxcodec/jbig2/JBig2_SddProc.cpp",
+        "src/fxcodec/jbig2/JBig2_Segment.cpp",
+        "src/fxcodec/jbig2/JBig2_SymbolDict.cpp",
+        "src/fxcodec/jbig2/JBig2_TrdProc.cpp",
+    ],
+}

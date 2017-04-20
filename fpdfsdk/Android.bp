@@ -1,0 +1,7 @@
+build = [
+    "pdfium.bp",
+    "pdfiumformfiller.bp",
+    "pdfiumfxedit.bp",
+    "pdfiumjavascript.bp",
+    "pdfiumpdfwindow.bp",
+]

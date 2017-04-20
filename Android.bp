@@ -1,0 +1,31 @@
+cc_defaults {
+    name: "pdfium-defaults",
+    cflags: [
+        "-O3",
+        "-fstrict-aliasing",
+        "-fprefetch-loop-arrays",
+        "-fexceptions",
+
+        "-Wno-non-virtual-dtor",
+        "-Wall",
+    ],
+
+    arch: {
+        arm: {
+            instruction_set: "arm",
+        },
+    },
+
+    header_libs: ["pdfium-headers"],
+}
+
+cc_library_headers {
+    name: "pdfium-headers",
+    export_include_dirs: ["."],
+}
+
+subdirs = [
+    "core",
+    "fpdfsdk",
+    "third_party",
+]

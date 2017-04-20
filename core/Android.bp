@@ -1,0 +1,9 @@
+build = [
+    "pdfiumfdrm.bp",
+    "pdfiumfpdfapi.bp",
+    "pdfiumfpdfdoc.bp",
+    "pdfiumfpdftext.bp",
+    "pdfiumfxcodec.bp",
+    "pdfiumfxcrt.bp",
+    "pdfiumfxge.bp",
+]

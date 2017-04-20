@@ -1,0 +1,34 @@
+cc_library_static {
+    name: "libpdfiumfpdfdoc",
+    defaults: ["pdfium-defaults"],
+
+    cflags: [
+        "-DOPJ_STATIC",
+        "-DV8_DEPRECATION_WARNINGS",
+        "-D_CRT_SECURE_NO_WARNINGS",
+
+        // Mask some warnings. These are benign, but we probably want to fix them
+        // upstream at some point.
+        "-Wno-sign-compare",
+        "-Wno-unused-parameter",
+    ],
+
+    srcs: [
+        "src/fpdfdoc/doc_action.cpp",
+        "src/fpdfdoc/doc_annot.cpp",
+        "src/fpdfdoc/doc_ap.cpp",
+        "src/fpdfdoc/doc_basic.cpp",
+        "src/fpdfdoc/doc_bookmark.cpp",
+        "src/fpdfdoc/doc_form.cpp",
+        "src/fpdfdoc/doc_formcontrol.cpp",
+        "src/fpdfdoc/doc_formfield.cpp",
+        "src/fpdfdoc/doc_link.cpp",
+        "src/fpdfdoc/doc_metadata.cpp",
+        "src/fpdfdoc/doc_ocg.cpp",
+        "src/fpdfdoc/doc_tagged.cpp",
+        "src/fpdfdoc/doc_utils.cpp",
+        "src/fpdfdoc/doc_viewerPreferences.cpp",
+        "src/fpdfdoc/doc_vt.cpp",
+        "src/fpdfdoc/doc_vtmodule.cpp",
+    ],
+}
