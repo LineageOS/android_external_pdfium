@@ -1,0 +1,48 @@
+cc_library_static {
+    name: "libpdfiumfxcrt",
+    defaults: ["pdfium-defaults"],
+
+    arch: {
+        arm64: {
+            cflags: [
+                "-D_FX_CPU_=_FX_X64_",
+                "-fPIC",
+            ],
+        },
+    },
+
+    cflags: [
+        "-DOPJ_STATIC",
+        "-DV8_DEPRECATION_WARNINGS",
+        "-D_CRT_SECURE_NO_WARNINGS",
+
+        // Mask some warnings. These are benign, but we probably want to fix them
+        // upstream at some point.
+        "-Wno-sign-compare",
+        "-Wno-unused-parameter",
+    ],
+
+    srcs: [
+        "src/fxcrt/fx_basic_array.cpp",
+        "src/fxcrt/fx_basic_bstring.cpp",
+        "src/fxcrt/fx_basic_buffer.cpp",
+        "src/fxcrt/fx_basic_coords.cpp",
+        "src/fxcrt/fx_basic_gcc.cpp",
+        "src/fxcrt/fx_basic_list.cpp",
+        "src/fxcrt/fx_basic_maps.cpp",
+        "src/fxcrt/fx_basic_memmgr.cpp",
+        "src/fxcrt/fx_basic_plex.cpp",
+        "src/fxcrt/fx_basic_utf.cpp",
+        "src/fxcrt/fx_basic_util.cpp",
+        "src/fxcrt/fx_basic_wstring.cpp",
+        "src/fxcrt/fx_bidi.cpp",
+        "src/fxcrt/fx_extension.cpp",
+        "src/fxcrt/fx_ucddata.cpp",
+        "src/fxcrt/fx_unicode.cpp",
+        "src/fxcrt/fx_xml_composer.cpp",
+        "src/fxcrt/fx_xml_parser.cpp",
+        "src/fxcrt/fxcrt_platforms.cpp",
+        "src/fxcrt/fxcrt_posix.cpp",
+        "src/fxcrt/fxcrt_windows.cpp",
+    ],
+}
