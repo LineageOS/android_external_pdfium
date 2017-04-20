@@ -1,0 +1,23 @@
+cc_library_static {
+    name: "libpdfiumfpdftext",
+    defaults: ["pdfium-defaults"],
+
+    cflags: [
+        "-DOPJ_STATIC",
+        "-DV8_DEPRECATION_WARNINGS",
+        "-D_CRT_SECURE_NO_WARNINGS",
+
+        // Mask some warnings. These are benign, but we probably want to fix them
+        // upstream at some point.
+        "-Wno-sign-compare",
+        "-Wno-unused-parameter",
+    ],
+
+    srcs: [
+        "src/fpdftext/fpdf_text.cpp",
+        "src/fpdftext/fpdf_text_int.cpp",
+        "src/fpdftext/fpdf_text_search.cpp",
+        "src/fpdftext/unicodenormalization.cpp",
+        "src/fpdftext/unicodenormalizationdata.cpp",
+    ],
+}
