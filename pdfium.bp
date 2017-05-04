@@ -72,4 +72,6 @@ cc_library_shared {
         "fpdfsdk/fsdk_pauseadapter.cpp",
         "fpdfsdk/pdfsdk_fieldaction.cpp",
     ],
+
+    export_include_dirs: ["public"],
 }
