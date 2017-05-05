@@ -61,4 +61,7 @@ cc_library_shared {
         "src/fsdk_mgr.cpp",
         "src/fsdk_rendercontext.cpp",
     ],
+
+    export_include_dirs: ["include"],
+    export_header_lib_headers: ["pdfium-headers"],
 }
