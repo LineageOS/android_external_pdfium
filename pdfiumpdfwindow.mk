@@ -29,6 +29,7 @@ LOCAL_SRC_FILES := \
     fpdfsdk/pdfwindow/PWL_SpecialButton.cpp \
     fpdfsdk/pdfwindow/PWL_Utils.cpp \
     fpdfsdk/pdfwindow/PWL_Wnd.cpp \
+    fpdfsdk/pdfwindow/cpwl_color.cpp \
 
 LOCAL_C_INCLUDES := \
     external/pdfium \

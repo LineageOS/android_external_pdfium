@@ -63,6 +63,8 @@ LOCAL_SRC_FILES := \
     fpdfsdk/fpdfdoc.cpp \
     fpdfsdk/fpdfeditimg.cpp \
     fpdfsdk/fpdfeditpage.cpp \
+    fpdfsdk/fpdfeditpath.cpp \
+    fpdfsdk/fpdfedittext.cpp \
     fpdfsdk/fpdfformfill.cpp \
     fpdfsdk/fpdfppo.cpp \
     fpdfsdk/fpdfsave.cpp \
