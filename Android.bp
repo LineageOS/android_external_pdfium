@@ -6,8 +6,9 @@ cc_defaults {
         "-fprefetch-loop-arrays",
         "-fexceptions",
 
-        "-Wno-non-virtual-dtor",
+        "-Wextra",
         "-Wall",
+        "-Wno-non-virtual-dtor",
         "-Werror",
     ],
 
