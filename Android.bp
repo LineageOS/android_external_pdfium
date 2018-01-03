@@ -9,6 +9,7 @@ cc_defaults {
         "-Wextra",
         "-Wall",
         "-Wno-non-virtual-dtor",
+        "-Wno-null-pointer-arithmetic",
         "-Werror",
     ],
 
