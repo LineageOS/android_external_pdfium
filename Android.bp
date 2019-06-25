@@ -18,6 +18,10 @@ cc_defaults {
         // and cpwl_edit_impl.cpp:1825 have -Wimplicit-fallthrough.
         "-Werror",
 
+        // The new pass manager causes non-deterministic build result.
+        // http://b/135660678
+        "-fno-experimental-new-pass-manager",
+
         "-DOPJ_STATIC",
         "-DPNG_PREFIX",
         "-DPNG_USE_READ_MACROS",
