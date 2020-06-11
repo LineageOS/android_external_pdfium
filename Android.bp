@@ -11,10 +11,6 @@ cc_defaults {
         "-Wno-non-virtual-dtor",
         "-Wno-unused-parameter",
 
-        // The new pass manager causes non-deterministic build result.
-        // http://b/135660678
-        "-fno-experimental-new-pass-manager",
-
         // pdfium_common_config
         "-DOPJ_STATIC",
         "-DPNG_PREFIX",
