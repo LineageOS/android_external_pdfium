@@ -5,7 +5,7 @@ cc_library_static {
     visibility: ["//external/pdfium:__subpackages__"],
 
     export_shared_lib_headers: [
-        "libandroidicu",
+        "libicu",
     ],
 
     static_libs: [
@@ -13,7 +13,7 @@ cc_library_static {
     ],
 
     shared_libs: [
-        "libandroidicu",
+        "libicu",
     ],
 
     exclude_srcs: [
