@@ -96,9 +96,9 @@ cc_library_shared {
 
     // TODO: figure out why turning on exceptions requires manually linking libdl
     shared_libs: [
-        "libandroidicu",
         "libdl",
         "libft2",
+        "libicu",
         "libjpeg",
         "libz",
     ],
