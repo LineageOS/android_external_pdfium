@@ -80,6 +80,7 @@ cc_library_static {
 cc_library_static {
     name: "libpdfium-libopenjpeg2",
     defaults: ["pdfium-third-party"],
+    visibility: ["//cts/hostsidetests/securitybulletin/securityPatch/CVE-2016-8332"],
 
     exclude_srcs: [
         "libopenjpeg20/t1_generate_luts.c",
