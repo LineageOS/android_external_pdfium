@@ -55,6 +55,14 @@ cc_defaults {
         "-DOPJ_STATIC",
         "-DPNG_PREFIX",
         "-DPNG_USE_READ_MACROS",
+
+        // Do not export functions by default. Export only functions annotated
+        // with FPDF_EXPORT.
+        "-fvisibility=hidden",
+
+        // Macro definitions to enable FPDF_EXPORT.
+        "-DCOMPONENT_BUILD",
+        "-DFPDF_IMPLEMENTATION",
     ],
 
     arch: {
@@ -141,6 +149,10 @@ cc_library_shared {
         "libicu",
         "libjpeg",
         "libz",
+    ],
+
+    ldflags: [
+      "-Wl,-icf=all",
     ],
 
     export_include_dirs: ["public"],
