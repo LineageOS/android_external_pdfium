@@ -57,9 +57,6 @@ cc_library_static {
         "base/debug/*.cc",
         "base/allocator/partition_allocator/*.cc",
     ],
-
-    // http://b/199471467 Crashes compiler with -O3 when building fuzzer
-    cflags: ["-O2"],
 }
 
 cc_library_static {
