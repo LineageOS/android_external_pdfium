@@ -1,10 +1,10 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "core/fpdfapi/parser/cpdf_simple_parser.h"
 
-#include <string>
+#include <iterator>
 
 #include "core/fpdfapi/parser/fpdf_parser_utility.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -50,7 +50,7 @@ TEST(SimpleParserTest, GetWord) {
       STR_IN_OUT_CASE(" $^&&*\t\0sdff ", "$^&&*"),
       STR_IN_OUT_CASE("\n\r+3.5656 -11.0", "+3.5656"),
   };
-  for (size_t i = 0; i < FX_ArraySize(test_data); ++i) {
+  for (size_t i = 0; i < std::size(test_data); ++i) {
     const pdfium::StrFuncTestData& data = test_data[i];
     CPDF_SimpleParser parser(pdfium::make_span(data.input, data.input_size));
     ByteStringView word = parser.GetWord();

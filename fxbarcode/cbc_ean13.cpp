@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,19 +24,13 @@
 #include <memory>
 
 #include "fxbarcode/oned/BC_OnedEAN13Writer.h"
-#include "third_party/base/ptr_util.h"
 
-CBC_EAN13::CBC_EAN13()
-    : CBC_EANCode(pdfium::MakeUnique<CBC_OnedEAN13Writer>()) {}
+CBC_EAN13::CBC_EAN13() : CBC_EANCode(std::make_unique<CBC_OnedEAN13Writer>()) {}
 
 CBC_EAN13::~CBC_EAN13() = default;
 
 BC_TYPE CBC_EAN13::GetType() {
-  return BC_EAN13;
-}
-
-BCFORMAT CBC_EAN13::GetFormat() const {
-  return BCFORMAT_EAN_13;
+  return BC_TYPE::kEAN13;
 }
 
 size_t CBC_EAN13::GetMaxLength() const {

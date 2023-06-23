@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 #include "fxjs/xfa/cjx_object.h"
 #include "fxjs/xfa/jse_define.h"
 
-class CFXJSE_Value;
 class CScript_EventPseudoModel;
 
 enum class XFA_Event {
@@ -35,7 +34,7 @@ enum class XFA_Event {
 
 class CJX_EventPseudoModel final : public CJX_Object {
  public:
-  explicit CJX_EventPseudoModel(CScript_EventPseudoModel* model);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CJX_EventPseudoModel() override;
 
   // CJX_Object:
@@ -63,13 +62,18 @@ class CJX_EventPseudoModel final : public CJX_Object {
   JSE_PROP(target);
 
  private:
+  explicit CJX_EventPseudoModel(CScript_EventPseudoModel* model);
+
   using Type__ = CJX_EventPseudoModel;
   using ParentType__ = CJX_Object;
 
   static const TypeTag static_type__ = TypeTag::EventPseudoModel;
   static const CJX_MethodSpec MethodSpecs[];
 
-  void Property(CFXJSE_Value* pValue, XFA_Event dwFlag, bool bSetting);
+  void Property(v8::Isolate* pIsolate,
+                v8::Local<v8::Value>* pValue,
+                XFA_Event dwFlag,
+                bool bSetting);
 };
 
 #endif  // FXJS_XFA_CJX_EVENTPSEUDOMODEL_H_

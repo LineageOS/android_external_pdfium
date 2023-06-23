@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,10 @@
 #include <utility>
 
 #include "xfa/fde/cfde_texteditengine.h"
+#include "xfa/fgas/graphics/cfgas_gepath.h"
 #include "xfa/fwl/cfwl_event.h"
 #include "xfa/fwl/cfwl_scrollbar.h"
 #include "xfa/fwl/cfwl_widget.h"
-#include "xfa/fxgraphics/cxfa_gepath.h"
 
 #define FWL_STYLEEXT_EDT_ReadOnly (1L << 0)
 #define FWL_STYLEEXT_EDT_MultiLine (1L << 1)
@@ -38,36 +38,36 @@
 #define FWL_STYLEEXT_EDT_ShowScrollbarFocus (1L << 25)
 #define FWL_STYLEEXT_EDT_OuterScrollbar (1L << 26)
 
-class CFWL_Edit;
+class CFWL_MessageKey;
 class CFWL_MessageMouse;
-class CFWL_WidgetProperties;
 class CFWL_Caret;
+class CFX_RenderDevice;
 
 class CFWL_Edit : public CFWL_Widget, public CFDE_TextEditEngine::Delegate {
  public:
-  CFWL_Edit(const CFWL_App* app,
-            std::unique_ptr<CFWL_WidgetProperties> properties,
-            CFWL_Widget* pOuter);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CFWL_Edit() override;
 
   // CFWL_Widget:
+  void PreFinalize() override;
+  void Trace(cppgc::Visitor* visitor) const override;
   FWL_Type GetClassID() const override;
   CFX_RectF GetAutosizedWidgetRect() override;
   CFX_RectF GetWidgetRect() override;
   void Update() override;
   FWL_WidgetHit HitTest(const CFX_PointF& point) override;
   void SetStates(uint32_t dwStates) override;
-  void DrawWidget(CXFA_Graphics* pGraphics, const CFX_Matrix& matrix) override;
-  void SetThemeProvider(IFWL_ThemeProvider* pThemeProvider) override;
+  void DrawWidget(CFGAS_GEGraphics* pGraphics,
+                  const CFX_Matrix& matrix) override;
   void OnProcessMessage(CFWL_Message* pMessage) override;
   void OnProcessEvent(CFWL_Event* pEvent) override;
-  void OnDrawWidget(CXFA_Graphics* pGraphics,
+  void OnDrawWidget(CFGAS_GEGraphics* pGraphics,
                     const CFX_Matrix& matrix) override;
 
   virtual void SetText(const WideString& wsText);
   virtual void SetTextSkipNotify(const WideString& wsText);
 
-  int32_t GetTextLength() const;
+  size_t GetTextLength() const;
   WideString GetText() const;
   void ClearText();
 
@@ -80,15 +80,13 @@ class CFWL_Edit : public CFWL_Widget, public CFDE_TextEditEngine::Delegate {
   int32_t GetLimit() const;
   void SetLimit(int32_t nLimit);
   void SetAliasChar(wchar_t wAlias);
-  Optional<WideString> Copy();
-  Optional<WideString> Cut();
+  absl::optional<WideString> Copy();
+  absl::optional<WideString> Cut();
   bool Paste(const WideString& wsPaste);
   bool Undo();
   bool Redo();
   bool CanUndo();
   bool CanRedo();
-
-  void SetOuter(CFWL_Widget* pOuter);
 
   // CFDE_TextEditEngine::Delegate
   void NotifyTextFull() override;
@@ -100,21 +98,20 @@ class CFWL_Edit : public CFWL_Widget, public CFDE_TextEditEngine::Delegate {
   void SetScrollOffset(float fScrollOffset) override;
 
  protected:
+  CFWL_Edit(CFWL_App* app, const Properties& properties, CFWL_Widget* pOuter);
+
   void ShowCaret(CFX_RectF* pRect);
   void HideCaret(CFX_RectF* pRect);
-  const CFX_RectF& GetRTClient() const { return m_rtClient; }
+  const CFX_RectF& GetRTClient() const { return m_ClientRect; }
   CFDE_TextEditEngine* GetTxtEdtEngine() { return m_pEditEngine.get(); }
 
  private:
   void RenderText(CFX_RenderDevice* pRenderDev,
                   const CFX_RectF& clipRect,
                   const CFX_Matrix& mt);
-  void DrawTextBk(CXFA_Graphics* pGraphics,
-                  IFWL_ThemeProvider* pTheme,
-                  const CFX_Matrix* pMatrix);
-  void DrawContent(CXFA_Graphics* pGraphics,
-                   IFWL_ThemeProvider* pTheme,
-                   const CFX_Matrix* pMatrix);
+  void DrawContent(CFGAS_GEGraphics* pGraphics, const CFX_Matrix& mtMatrix);
+  void DrawContentNonComb(CFGAS_GEGraphics* pGraphics,
+                          const CFX_Matrix& mtMatrix);
 
   void UpdateEditEngine();
   void UpdateEditParams();
@@ -128,17 +125,16 @@ class CFWL_Edit : public CFWL_Widget, public CFDE_TextEditEngine::Delegate {
   void LayoutScrollBar();
   CFX_PointF DeviceToEngine(const CFX_PointF& pt);
   void InitVerticalScrollBar();
-  void InitHorizontalScrollBar();
   void InitEngine();
   void InitCaret();
-  bool ValidateNumberChar(wchar_t cNum);
-  bool IsShowScrollBar(bool bVert);
-  bool IsContentHeightOverflow();
+  bool IsShowVertScrollBar() const;
+  bool IsContentHeightOverflow() const;
   void SetCursorPosition(size_t position);
   void UpdateCursorRect();
 
   void DoRButtonDown(CFWL_MessageMouse* pMsg);
-  void OnFocusChanged(CFWL_Message* pMsg, bool bSet);
+  void OnFocusGained();
+  void OnFocusLost();
   void OnLButtonDown(CFWL_MessageMouse* pMsg);
   void OnLButtonUp(CFWL_MessageMouse* pMsg);
   void OnButtonDoubleClick(CFWL_MessageMouse* pMsg);
@@ -149,23 +145,20 @@ class CFWL_Edit : public CFWL_Widget, public CFDE_TextEditEngine::Delegate {
                 CFWL_EventScroll::Code dwCode,
                 float fPos);
 
-  CFX_RectF m_rtClient;
-  CFX_RectF m_rtEngine;
-  CFX_RectF m_rtStatic;
-  CFX_RectF m_rtCaret;
+  CFX_RectF m_ClientRect;
+  CFX_RectF m_EngineRect;
+  CFX_RectF m_StaticRect;
+  CFX_RectF m_CaretRect;
   bool m_bLButtonDown = false;
-  bool m_bSetRange = false;
   int32_t m_nLimit = -1;
-  int32_t m_iMax = 0xFFFFFFF;
   float m_fVAlignOffset = 0.0f;
   float m_fScrollOffsetX = 0.0f;
   float m_fScrollOffsetY = 0.0f;
   float m_fFontSize = 0.0f;
   size_t m_CursorPosition = 0;
   std::unique_ptr<CFDE_TextEditEngine> const m_pEditEngine;
-  std::unique_ptr<CFWL_ScrollBar> m_pVertScrollBar;
-  std::unique_ptr<CFWL_ScrollBar> m_pHorzScrollBar;
-  std::unique_ptr<CFWL_Caret> m_pCaret;
+  cppgc::Member<CFWL_ScrollBar> m_pVertScrollBar;
+  cppgc::Member<CFWL_Caret> m_pCaret;
   WideString m_wsCache;
   WideString m_wsFont;
 };

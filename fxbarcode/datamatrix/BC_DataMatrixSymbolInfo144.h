@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,7 @@ class CBC_DataMatrixSymbolInfo144 final : public CBC_SymbolInfo {
   ~CBC_DataMatrixSymbolInfo144() override;
 
   // CBC_SymbolInfo:
-  size_t getInterleavedBlockCount() const override;
+  size_t GetInterleavedBlockCount() const override;
 };
 
 #endif  // FXBARCODE_DATAMATRIX_BC_DATAMATRIXSYMBOLINFO144_H_

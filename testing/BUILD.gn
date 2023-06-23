@@ -1,4 +1,4 @@
-# Copyright 2018 The PDFium Authors. All rights reserved.
+# Copyright 2018 The PDFium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -7,16 +7,23 @@ import("../pdfium.gni")
 source_set("test_support") {
   testonly = true
   sources = [
+    "command_line_helpers.cpp",
+    "command_line_helpers.h",
+    "font_renamer.cpp",
+    "font_renamer.h",
     "fx_string_testhelpers.cpp",
     "fx_string_testhelpers.h",
     "invalid_seekable_read_stream.cpp",
     "invalid_seekable_read_stream.h",
     "pseudo_retainable.h",
+    "scoped_set_tz.cpp",
+    "scoped_set_tz.h",
     "string_write_stream.cpp",
     "string_write_stream.h",
+    "test_fonts.cpp",
+    "test_fonts.h",
     "test_loader.cpp",
     "test_loader.h",
-    "test_support.cpp",
     "test_support.h",
     "utils/bitmap_saver.cpp",
     "utils/bitmap_saver.h",
@@ -24,10 +31,12 @@ source_set("test_support") {
     "utils/file_util.h",
     "utils/hash.cpp",
     "utils/hash.h",
-    "utils/path_service.cpp",
-    "utils/path_service.h",
   ]
   data = [ "resources/" ]
+  public_deps = [
+    ":path_service",
+    "//third_party/test_fonts",
+  ]
   deps = [
     "../:pdfium_public_headers",
     "../core/fdrm",
@@ -35,9 +44,11 @@ source_set("test_support") {
     "../core/fxge",
     "image_diff",
   ]
-  configs += [ "../:pdfium_core_config" ]
+  configs += [
+    "../:pdfium_strict_config",
+    "../:pdfium_noshorten_config",
+  ]
   visibility = [ "../*" ]
-
   if (pdf_enable_v8) {
     sources += [
       "v8_initializer.cpp",
@@ -51,25 +62,92 @@ source_set("test_support") {
   }
 }
 
+source_set("path_service") {
+  testonly = true
+  sources = [
+    "utils/path_service.cpp",
+    "utils/path_service.h",
+  ]
+  deps = [ "../core/fxcrt" ]
+  configs += [
+    "../:pdfium_strict_config",
+    "../:pdfium_noshorten_config",
+  ]
+  visibility = [ "../*" ]
+}
+
+source_set("test_environments") {
+  testonly = true
+  sources = [
+    "pdf_test_environment.cpp",
+    "pdf_test_environment.h",
+  ]
+  deps = [
+    ":test_support",
+    "../core/fxcrt",
+    "../core/fxge",
+    "//testing/gtest",
+  ]
+  configs += [
+    "../:pdfium_strict_config",
+    "../:pdfium_noshorten_config",
+  ]
+  if (pdf_enable_v8) {
+    sources += [
+      "v8_test_environment.cpp",
+      "v8_test_environment.h",
+    ]
+    deps += [
+      "../fxjs",
+      "//v8",
+      "//v8:v8_libplatform",
+    ]
+    configs += [ "//v8:external_startup_data" ]
+  }
+  if (pdf_enable_xfa) {
+    sources += [
+      "xfa_test_environment.cpp",
+      "xfa_test_environment.h",
+    ]
+    deps += [
+      "../fxjs:gc",
+      "../xfa/fgas/font",
+    ]
+  }
+}
+
 source_set("unit_test_support") {
   testonly = true
   sources = []
   deps = []
-
-  configs += [ "../:pdfium_core_config" ]
-  visibility = [ "../*" ]
-
-  if (pdf_enable_xfa) {
+  configs += [
+    "../:pdfium_strict_config",
+    "../:pdfium_noshorten_config",
+  ]
+  public_deps = [
+    ":test_environments",
+    ":test_support",
+  ]
+  if (pdf_enable_v8) {
     sources += [
-      "xfa_unit_test_support.cpp",
-      "xfa_unit_test_support.h",
+      "fxv8_unittest.cpp",
+      "fxv8_unittest.h",
     ]
     deps += [
-      "../:pdfium",
-      "../core/fxge",
-      "../xfa/fgas",
+      "../fxjs",
       "//testing/gtest",
     ]
+    configs += [ "//v8:external_startup_data" ]
+    if (pdf_enable_xfa) {
+      sources += [
+        "fxgc_unittest.cpp",
+        "fxgc_unittest.h",
+      ]
+      deps += [
+        "../fxjs:gc",
+        "//testing/gtest",
+      ]
+    }
   }
 }
 
@@ -78,6 +156,10 @@ source_set("embedder_test_support") {
   sources = [
     "embedder_test.cpp",
     "embedder_test.h",
+    "embedder_test_constants.cpp",
+    "embedder_test_constants.h",
+    "embedder_test_environment.cpp",
+    "embedder_test_environment.h",
     "embedder_test_mock_delegate.h",
     "embedder_test_timer_handling_delegate.h",
     "fake_file_access.cpp",
@@ -85,26 +167,37 @@ source_set("embedder_test_support") {
     "range_set.cpp",
     "range_set.h",
   ]
-
   deps = [
-    ":test_support",
     "../:pdfium_public_headers",
     "../core/fdrm",
     "../core/fxcrt",
+    "../core/fxge",
     "../third_party:pdfium_base",
     "//testing/gmock",
     "//testing/gtest",
   ]
-  configs += [ "../:pdfium_core_config" ]
+  public_deps = [
+    ":test_environments",
+    ":test_support",
+  ]
+  configs += [
+    "../:pdfium_strict_config",
+    "../:pdfium_noshorten_config",
+  ]
   visibility = [ "../*" ]
-
   if (pdf_enable_v8) {
     sources += [
+      "external_engine_embedder_test.cpp",
+      "external_engine_embedder_test.h",
       "js_embedder_test.cpp",
       "js_embedder_test.h",
     ]
-    deps += [ "../fxjs" ]
-
+    deps += [
+      "../fxjs",
+      "//v8",
+      "//v8:v8_libplatform",
+    ]
+    configs += [ "//v8:external_startup_data" ]
     if (pdf_enable_xfa) {
       sources += [
         "xfa_js_embedder_test.cpp",
@@ -118,4 +211,8 @@ source_set("embedder_test_support") {
       ]
     }
   }
+}
+
+# Dummy group to keep satisfy references from //build.
+group("test_scripts_shared") {
 }

@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,14 @@
 #include "xfa/fxfa/parser/cxfa_imageedit.h"
 
 #include "fxjs/xfa/cjx_node.h"
-#include "third_party/base/ptr_util.h"
+#include "xfa/fxfa/parser/cxfa_document.h"
 
 namespace {
 
 const CXFA_Node::PropertyData kImageEditPropertyData[] = {
-    {XFA_Element::Margin, 1, 0},
-    {XFA_Element::Border, 1, 0},
-    {XFA_Element::Extras, 1, 0},
+    {XFA_Element::Margin, 1, {}},
+    {XFA_Element::Border, 1, {}},
+    {XFA_Element::Extras, 1, {}},
 };
 
 const CXFA_Node::AttributeData kImageEditAttributeData[] = {
@@ -30,12 +30,14 @@ const CXFA_Node::AttributeData kImageEditAttributeData[] = {
 CXFA_ImageEdit::CXFA_ImageEdit(CXFA_Document* doc, XFA_PacketType packet)
     : CXFA_Node(doc,
                 packet,
-                (XFA_XDPPACKET_Template | XFA_XDPPACKET_Form),
+                {XFA_XDPPACKET::kTemplate, XFA_XDPPACKET::kForm},
                 XFA_ObjectType::Node,
                 XFA_Element::ImageEdit,
                 kImageEditPropertyData,
                 kImageEditAttributeData,
-                pdfium::MakeUnique<CJX_Node>(this)) {}
+                cppgc::MakeGarbageCollected<CJX_Node>(
+                    doc->GetHeap()->GetAllocationHandle(),
+                    this)) {}
 
 CXFA_ImageEdit::~CXFA_ImageEdit() = default;
 

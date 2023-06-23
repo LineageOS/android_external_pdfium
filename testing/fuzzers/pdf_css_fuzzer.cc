@@ -1,8 +1,6 @@
-// Copyright 2016 The PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include <memory>
 
 #include "core/fxcrt/css/cfx_css.h"
 #include "core/fxcrt/css/cfx_csssyntaxparser.h"
@@ -16,11 +14,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   if (input.IsEmpty())
     return 0;
 
-  CFX_CSSSyntaxParser parser(input.c_str(), input.GetLength());
-  CFX_CSSSyntaxStatus status;
+  CFX_CSSSyntaxParser parser(input.AsStringView());
+  CFX_CSSSyntaxParser::Status status;
   do {
     status = parser.DoSyntaxParse();
-  } while (status != CFX_CSSSyntaxStatus::Error &&
-           status != CFX_CSSSyntaxStatus::EOS);
+  } while (status != CFX_CSSSyntaxParser::Status::kError &&
+           status != CFX_CSSSyntaxParser::Status::kEOS);
   return 0;
 }

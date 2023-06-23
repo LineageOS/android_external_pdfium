@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,13 @@
 #ifndef XFA_FXFA_CXFA_FFDOCVIEW_H_
 #define XFA_FXFA_CXFA_FFDOCVIEW_H_
 
-#include <deque>
-#include <memory>
+#include <list>
 #include <vector>
 
-#include "core/fxcrt/observed_ptr.h"
-#include "core/fxcrt/unowned_ptr.h"
+#include "fxjs/gc/heap.h"
+#include "v8/include/cppgc/garbage-collected.h"
+#include "v8/include/cppgc/member.h"
+#include "v8/include/cppgc/visitor.h"
 #include "xfa/fxfa/cxfa_eventparam.h"
 #include "xfa/fxfa/cxfa_ffdoc.h"
 #include "xfa/fxfa/cxfa_ffwidget.h"
@@ -22,38 +23,39 @@ class CXFA_BindItems;
 class CXFA_FFDoc;
 class CXFA_FFWidgetHandler;
 class CXFA_Node;
-class CXFA_ReadyNodeIterator;
 class CXFA_Subform;
 class CXFA_ViewLayoutItem;
 
-extern const XFA_AttributeValue gs_EventActivity[];
-enum XFA_DOCVIEW_LAYOUTSTATUS {
-  XFA_DOCVIEW_LAYOUTSTATUS_None,
-  XFA_DOCVIEW_LAYOUTSTATUS_Start,
-  XFA_DOCVIEW_LAYOUTSTATUS_FormInitialize,
-  XFA_DOCVIEW_LAYOUTSTATUS_FormInitCalculate,
-  XFA_DOCVIEW_LAYOUTSTATUS_FormInitValidate,
-  XFA_DOCVIEW_LAYOUTSTATUS_FormFormReady,
-  XFA_DOCVIEW_LAYOUTSTATUS_Doing,
-  XFA_DOCVIEW_LAYOUTSTATUS_PagesetInitialize,
-  XFA_DOCVIEW_LAYOUTSTATUS_PagesetInitCalculate,
-  XFA_DOCVIEW_LAYOUTSTATUS_PagesetInitValidate,
-  XFA_DOCVIEW_LAYOUTSTATUS_PagesetFormReady,
-  XFA_DOCVIEW_LAYOUTSTATUS_LayoutReady,
-  XFA_DOCVIEW_LAYOUTSTATUS_DocReady,
-  XFA_DOCVIEW_LAYOUTSTATUS_End
-};
+extern const XFA_AttributeValue kXFAEventActivity[];
 
-class CXFA_FFDocView {
+class CXFA_FFDocView : public cppgc::GarbageCollected<CXFA_FFDocView> {
  public:
-  explicit CXFA_FFDocView(CXFA_FFDoc* pDoc);
+  enum class LayoutStatus : uint8_t { kNone, kStart, kDoing, kEnd };
+
+  class UpdateScope {
+    CPPGC_STACK_ALLOCATED();
+
+   public:
+    explicit UpdateScope(CXFA_FFDocView* pDocView);
+    ~UpdateScope();
+
+   private:
+    UnownedPtr<CXFA_FFDocView> const m_pDocView;
+  };
+
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_FFDocView();
 
-  CXFA_FFDoc* GetDoc() const { return m_pDoc.Get(); }
+  void Trace(cppgc::Visitor* visitor) const;
+
+  CXFA_FFDoc* GetDoc() const { return m_pDoc; }
   int32_t StartLayout();
   int32_t DoLayout();
   void StopLayout();
-  int32_t GetLayoutStatus() const { return m_iStatus; }
+
+  void SetLayoutEvent() { m_bLayoutEvent = true; }
+  bool InLayoutStatus() const { return m_bInLayoutStatus; }
+  LayoutStatus GetLayoutStatus() const { return m_iStatus; }
 
   void UpdateDocView();
   void UpdateUIDisplay(CXFA_Node* pNode, CXFA_FFWidget* pExcept);
@@ -62,15 +64,16 @@ class CXFA_FFDocView {
   CXFA_FFPageView* GetPageView(int32_t nIndex) const;
 
   void ResetNode(CXFA_Node* pNode);
+  CXFA_Node* GetRootSubform();
   CXFA_FFWidgetHandler* GetWidgetHandler();
-  std::unique_ptr<CXFA_ReadyNodeIterator> CreateReadyNodeIterator();
-  CXFA_FFWidget* GetFocusWidget() const { return m_pFocusWidget.Get(); }
+  CXFA_FFWidget* GetFocusWidget() const { return m_pFocusWidget; }
   bool SetFocus(CXFA_FFWidget* pNewFocus);
   CXFA_FFWidget* GetWidgetForNode(CXFA_Node* node);
   CXFA_FFWidget* GetWidgetByName(const WideString& wsName,
                                  CXFA_FFWidget* pRefWidget);
-  CXFA_LayoutProcessor* GetXFALayout() const;
-  void OnPageEvent(CXFA_ViewLayoutItem* pSender, uint32_t dwEvent);
+  CXFA_LayoutProcessor* GetLayoutProcessor() const;
+  void OnPageViewEvent(CXFA_ViewLayoutItem* pSender,
+                       CXFA_FFDoc::PageViewEvent eEvent);
   void LockUpdate() { m_iLock++; }
   void UnlockUpdate() { m_iLock--; }
   void InvalidateRect(CXFA_FFPageView* pPageView,
@@ -86,8 +89,8 @@ class CXFA_FFDocView {
 
   bool RunLayout();
   void AddNewFormNode(CXFA_Node* pNode);
-  void AddIndexChangedSubform(CXFA_Node* pNode);
-  CXFA_Node* GetFocusNode() const { return m_pFocusNode.Get(); }
+  void AddIndexChangedSubform(CXFA_Subform* pNode);
+  CXFA_Node* GetFocusNode() const { return m_pFocusNode; }
   void SetFocusNode(CXFA_Node* pNode);
   void DeleteLayoutItem(CXFA_FFWidget* pWidget);
   XFA_EventError ExecEventActivityByDeepFirst(CXFA_Node* pFormNode,
@@ -96,14 +99,11 @@ class CXFA_FFDocView {
                                               bool bRecursive);
 
   void AddBindItem(CXFA_BindItems* item) { m_BindItems.push_back(item); }
-
-  bool m_bLayoutEvent = false;
-  bool m_bInLayoutStatus = false;
-  std::vector<WideString> m_arrNullTestMsg;
-
-  void ResetLayoutProcessor() { m_pXFADocLayout.Release(); }
+  void AddNullTestMsg(const WideString& msg);
 
  private:
+  explicit CXFA_FFDocView(CXFA_FFDoc* pDoc);
+
   bool RunEventLayoutReady();
   void RunBindItems();
   void InitCalculate(CXFA_Node* pNode);
@@ -111,7 +111,6 @@ class CXFA_FFDocView {
   size_t RunCalculateRecursive(size_t index);
   void ShowNullTestMsg();
   bool ResetSingleNodeData(CXFA_Node* pNode);
-  CXFA_Subform* GetRootSubform();
 
   bool IsUpdateLocked() const { return m_iLock > 0; }
   bool InitValidate(CXFA_Node* pNode);
@@ -119,17 +118,19 @@ class CXFA_FFDocView {
   XFA_EventError RunCalculateWidgets();
   void RunSubformIndexChange();
 
-  UnownedPtr<CXFA_FFDoc> const m_pDoc;
-  std::unique_ptr<CXFA_FFWidgetHandler> m_pWidgetHandler;
-  UnownedPtr<CXFA_LayoutProcessor> m_pXFADocLayout;
-  UnownedPtr<CXFA_Node> m_pFocusNode;
-  ObservedPtr<CXFA_FFWidget> m_pFocusWidget;
-  std::deque<CXFA_Node*> m_ValidateNodes;
-  std::vector<CXFA_Node*> m_CalculateNodes;
-  std::deque<CXFA_BindItems*> m_BindItems;
-  std::deque<CXFA_Node*> m_NewAddedNodes;
-  std::deque<CXFA_Node*> m_IndexChangedSubforms;
-  XFA_DOCVIEW_LAYOUTSTATUS m_iStatus = XFA_DOCVIEW_LAYOUTSTATUS_None;
+  cppgc::Member<CXFA_FFDoc> const m_pDoc;
+  cppgc::Member<CXFA_FFWidgetHandler> m_pWidgetHandler;
+  cppgc::Member<CXFA_Node> m_pFocusNode;
+  cppgc::Member<CXFA_FFWidget> m_pFocusWidget;
+  std::list<cppgc::Member<CXFA_Node>> m_ValidateNodes;
+  std::vector<cppgc::Member<CXFA_Node>> m_CalculateNodes;
+  std::list<cppgc::Member<CXFA_BindItems>> m_BindItems;
+  std::list<cppgc::Member<CXFA_Node>> m_NewAddedNodes;
+  std::list<cppgc::Member<CXFA_Subform>> m_IndexChangedSubforms;
+  std::vector<WideString> m_NullTestMsgArray;
+  bool m_bLayoutEvent = false;
+  bool m_bInLayoutStatus = false;
+  LayoutStatus m_iStatus = LayoutStatus::kNone;
   int32_t m_iLock = 0;
 };
 

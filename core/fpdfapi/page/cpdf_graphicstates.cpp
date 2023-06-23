@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 #include "core/fpdfapi/page/cpdf_graphicstates.h"
 
-CPDF_GraphicStates::CPDF_GraphicStates() {}
+CPDF_GraphicStates::CPDF_GraphicStates() = default;
 
-CPDF_GraphicStates::~CPDF_GraphicStates() {}
+CPDF_GraphicStates::~CPDF_GraphicStates() = default;
 
 void CPDF_GraphicStates::DefaultStates() {
   m_ColorState.Emplace();

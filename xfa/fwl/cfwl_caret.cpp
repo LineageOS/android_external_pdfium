@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,9 @@
 
 #include <utility>
 
-#include "third_party/base/ptr_util.h"
 #include "xfa/fwl/cfwl_app.h"
 #include "xfa/fwl/cfwl_notedriver.h"
 #include "xfa/fwl/cfwl_themebackground.h"
-#include "xfa/fwl/cfwl_widgetproperties.h"
 #include "xfa/fwl/ifwl_themeprovider.h"
 
 namespace {
@@ -23,10 +21,10 @@ constexpr int kStateHighlight = (1 << 0);
 
 }  // namespace
 
-CFWL_Caret::CFWL_Caret(const CFWL_App* app,
-                       std::unique_ptr<CFWL_WidgetProperties> properties,
+CFWL_Caret::CFWL_Caret(CFWL_App* app,
+                       const Properties& properties,
                        CFWL_Widget* pOuter)
-    : CFWL_Widget(app, std::move(properties), pOuter) {
+    : CFWL_Widget(app, properties, pOuter) {
   SetStates(kStateHighlight);
 }
 
@@ -38,51 +36,42 @@ FWL_Type CFWL_Caret::GetClassID() const {
 
 void CFWL_Caret::Update() {}
 
-void CFWL_Caret::DrawWidget(CXFA_Graphics* pGraphics,
+void CFWL_Caret::DrawWidget(CFGAS_GEGraphics* pGraphics,
                             const CFX_Matrix& matrix) {
   if (!pGraphics)
     return;
-  if (!m_pProperties->m_pThemeProvider)
-    m_pProperties->m_pThemeProvider = GetAvailableTheme();
-  if (!m_pProperties->m_pThemeProvider)
-    return;
 
-  DrawCaretBK(pGraphics, m_pProperties->m_pThemeProvider.Get(), &matrix);
+  DrawCaretBK(pGraphics, matrix);
 }
 
 void CFWL_Caret::ShowCaret() {
-  m_pTimer = pdfium::MakeUnique<CFX_Timer>(
-      GetOwnerApp()->GetAdapterNative()->GetTimerHandler(), this,
-      kBlinkPeriodMs);
-  RemoveStates(FWL_WGTSTATE_Invisible);
+  m_pTimer = std::make_unique<CFX_Timer>(GetFWLApp()->GetTimerHandler(), this,
+                                         kBlinkPeriodMs);
+  RemoveStates(FWL_STATE_WGT_Invisible);
   SetStates(kStateHighlight);
 }
 
 void CFWL_Caret::HideCaret() {
   m_pTimer.reset();
-  SetStates(FWL_WGTSTATE_Invisible);
+  SetStates(FWL_STATE_WGT_Invisible);
 }
 
-void CFWL_Caret::DrawCaretBK(CXFA_Graphics* pGraphics,
-                             IFWL_ThemeProvider* pTheme,
-                             const CFX_Matrix* pMatrix) {
-  if (!(m_pProperties->m_dwStates & kStateHighlight))
+void CFWL_Caret::DrawCaretBK(CFGAS_GEGraphics* pGraphics,
+                             const CFX_Matrix& mtMatrix) {
+  if (!(m_Properties.m_dwStates & kStateHighlight))
     return;
 
-  CFWL_ThemeBackground param;
-  param.m_pWidget = this;
-  param.m_pGraphics = pGraphics;
-  param.m_rtPart = CFX_RectF(0, 0, GetWidgetRect().Size());
-  param.m_iPart = CFWL_Part::Background;
-  param.m_dwStates = CFWL_PartState_HightLight;
-  if (pMatrix)
-    param.m_matrix.Concat(*pMatrix);
-  pTheme->DrawBackground(param);
+  CFWL_ThemeBackground param(CFWL_ThemePart::Part::kBackground, this,
+                             pGraphics);
+  param.m_PartRect = CFX_RectF(0, 0, GetWidgetRect().Size());
+  param.m_dwStates = CFWL_PartState::kHightLight;
+  param.m_matrix = mtMatrix;
+  GetThemeProvider()->DrawBackground(param);
 }
 
 void CFWL_Caret::OnProcessMessage(CFWL_Message* pMessage) {}
 
-void CFWL_Caret::OnDrawWidget(CXFA_Graphics* pGraphics,
+void CFWL_Caret::OnDrawWidget(CFGAS_GEGraphics* pGraphics,
                               const CFX_Matrix& matrix) {
   DrawWidget(pGraphics, matrix);
 }
