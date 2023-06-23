@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,23 +7,31 @@
 #ifndef XFA_FXFA_CXFA_FWLADAPTERWIDGETMGR_H_
 #define XFA_FXFA_CXFA_FWLADAPTERWIDGETMGR_H_
 
-#include "core/fxcrt/fx_coordinates.h"
-#include "core/fxcrt/fx_system.h"
+#include "fxjs/gc/heap.h"
+#include "v8/include/cppgc/garbage-collected.h"
 #include "xfa/fwl/cfwl_widgetmgr.h"
 
 class CFWL_Widget;
+class CFX_RectF;
 
-class CXFA_FWLAdapterWidgetMgr : public CFWL_WidgetMgr::AdapterIface {
+class CXFA_FWLAdapterWidgetMgr final
+    : public cppgc::GarbageCollected<CXFA_FWLAdapterWidgetMgr>,
+      public CFWL_WidgetMgr::AdapterIface {
  public:
-  CXFA_FWLAdapterWidgetMgr();
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_FWLAdapterWidgetMgr() override;
 
+  // CFWL_WidgetMgr::AdapterIface:
+  void Trace(cppgc::Visitor* visitor) const override;
   void RepaintWidget(CFWL_Widget* pWidget) override;
   bool GetPopupPos(CFWL_Widget* pWidget,
                    float fMinHeight,
                    float fMaxHeight,
                    const CFX_RectF& rtAnchor,
                    CFX_RectF* pPopupRect) override;
+
+ private:
+  CXFA_FWLAdapterWidgetMgr();
 };
 
 #endif  // XFA_FXFA_CXFA_FWLADAPTERWIDGETMGR_H_

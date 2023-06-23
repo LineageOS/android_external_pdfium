@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,14 @@
 #define XFA_FXFA_CXFA_READYNODEITERATOR_H_
 
 #include "core/fxcrt/unowned_ptr.h"
+#include "v8/include/cppgc/macros.h"
 #include "xfa/fxfa/parser/cxfa_traversestrategy_xfacontainernode.h"
 
 class CXFA_Node;
 
 class CXFA_ReadyNodeIterator {
+  CPPGC_STACK_ALLOCATED();  // Allow Raw/Unowned pointers.
+
  public:
   explicit CXFA_ReadyNodeIterator(CXFA_Node* pTravelRoot);
   ~CXFA_ReadyNodeIterator();
@@ -22,7 +25,7 @@ class CXFA_ReadyNodeIterator {
 
  private:
   CXFA_ContainerIterator m_ContentIterator;
-  UnownedPtr<CXFA_Node> m_pCurNode;
+  UnownedPtr<CXFA_Node> m_pCurNode;  // Ok, stack-only.
 };
 
 #endif  // XFA_FXFA_CXFA_READYNODEITERATOR_H_

@@ -13,11 +13,8 @@ cc_library_static {
 
     visibility: ["//external/pdfium:__subpackages__"],
 
-    header_libs: [
-        "libpdfium-constants",
-    ],
-
     static_libs: [
+        "libpdfium-constants",
         "libpdfium-fdrm",
         "libpdfium-page",
         "libpdfium-parser",

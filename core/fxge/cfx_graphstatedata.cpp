@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,15 +10,16 @@ CFX_GraphStateData::CFX_GraphStateData() = default;
 
 CFX_GraphStateData::CFX_GraphStateData(const CFX_GraphStateData& src) = default;
 
-CFX_GraphStateData::CFX_GraphStateData(CFX_GraphStateData&& src) = default;
+CFX_GraphStateData::CFX_GraphStateData(CFX_GraphStateData&& src) noexcept =
+    default;
 
 CFX_GraphStateData::~CFX_GraphStateData() = default;
 
 CFX_GraphStateData& CFX_GraphStateData::operator=(
     const CFX_GraphStateData& that) = default;
 
-CFX_GraphStateData& CFX_GraphStateData::operator=(CFX_GraphStateData&& that) =
-    default;
+CFX_GraphStateData& CFX_GraphStateData::operator=(
+    CFX_GraphStateData&& that) noexcept = default;
 
 CFX_RetainableGraphStateData::CFX_RetainableGraphStateData() = default;
 

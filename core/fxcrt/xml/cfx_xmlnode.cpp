@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,14 +20,4 @@ CFX_XMLNode* CFX_XMLNode::GetRoot() {
     pParent = pParent->GetParent();
 
   return pParent;
-}
-
-WideString CFX_XMLNode::EncodeEntities(const WideString& value) {
-  WideString ret = value;
-  ret.Replace(L"&", L"&amp;");
-  ret.Replace(L"<", L"&lt;");
-  ret.Replace(L">", L"&gt;");
-  ret.Replace(L"\'", L"&apos;");
-  ret.Replace(L"\"", L"&quot;");
-  return ret;
 }

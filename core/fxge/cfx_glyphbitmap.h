@@ -1,4 +1,4 @@
-// Copyright 2019 PDFium Authors. All rights reserved.
+// Copyright 2019 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,6 @@
 
 #ifndef CORE_FXGE_CFX_GLYPHBITMAP_H_
 #define CORE_FXGE_CFX_GLYPHBITMAP_H_
-
-#include <vector>
 
 #include "core/fxcrt/retain_ptr.h"
 

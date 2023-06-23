@@ -55,6 +55,7 @@ cc_library_static {
 
     srcs: [
         "base/debug/*.cc",
+        "base/memory/*.cc",
         "base/allocator/partition_allocator/*.cc",
     ],
 }
@@ -83,11 +84,12 @@ cc_library_static {
     visibility: ["//cts/hostsidetests/securitybulletin/securityPatch/CVE-2016-8332"],
 
     exclude_srcs: [
-        "libopenjpeg20/t1_generate_luts.c",
+        "libopenjpeg/t1_generate_luts.c",
     ],
 
     srcs: [
-        "libopenjpeg20/*.c",
+        "libopenjpeg/*.c",
+        "libopenjpeg/*.cc",
     ],
 }
 

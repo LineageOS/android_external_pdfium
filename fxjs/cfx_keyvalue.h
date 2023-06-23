@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,26 +10,26 @@
 #include <memory>
 #include <vector>
 
-#include "core/fxcrt/fx_string.h"
+#include "core/fxcrt/bytestring.h"
 
 class CFX_KeyValue;
 
 class CFX_Value {
  public:
   enum class DataType : uint8_t {
-    NUMBER = 0,
-    BOOLEAN,
-    STRING,
-    OBJECT,
-    NULLOBJ
+    kNumber = 0,
+    kBoolean,
+    kString,
+    kObject,
+    kNull
   };
 
   CFX_Value();
   ~CFX_Value();
 
-  DataType nType = DataType::NULLOBJ;
-  bool bData;
-  double dData;
+  DataType nType = DataType::kNull;
+  bool bData = false;
+  double dData = 0.0;
   ByteString sData;
   std::vector<std::unique_ptr<CFX_KeyValue>> objData;
 };

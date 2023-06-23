@@ -13,11 +13,12 @@ cc_library_static {
 
     visibility: ["//external/pdfium:__subpackages__"],
 
-    header_libs: [
-        "libpdfium-constants",
+    exclude_srcs: [
+        "test_with_page_module.cpp",
     ],
 
     static_libs: [
+        "libpdfium-constants",
         "libpdfium-fxcodec",
         "libpdfium-fxcrt",
         "libpdfium-fxge",

@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,57 +7,58 @@
 #ifndef XFA_FXFA_PARSER_CXFA_RECTANGLE_H_
 #define XFA_FXFA_PARSER_CXFA_RECTANGLE_H_
 
-#include <memory>
 #include <vector>
 
+#include "xfa/fgas/graphics/cfgas_gepath.h"
 #include "xfa/fxfa/parser/cxfa_box.h"
-#include "xfa/fxgraphics/cxfa_gepath.h"
 
 class CXFA_Rectangle : public CXFA_Box {
  public:
-  CXFA_Rectangle(CXFA_Document* doc, XFA_PacketType packet);
+  static CXFA_Rectangle* FromNode(CXFA_Node* pNode);
+
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_Rectangle() override;
 
   void GetFillPath(const std::vector<CXFA_Stroke*>& strokes,
                    const CFX_RectF& rtWidget,
-                   CXFA_GEPath* fillPath);
+                   CFGAS_GEPath* fillPath);
   void Draw(const std::vector<CXFA_Stroke*>& strokes,
-            CXFA_Graphics* pGS,
+            CFGAS_GEGraphics* pGS,
             CFX_RectF rtWidget,
             const CFX_Matrix& matrix);
 
  protected:
+  CXFA_Rectangle(CXFA_Document* doc, XFA_PacketType packet);
   CXFA_Rectangle(CXFA_Document* pDoc,
                  XFA_PacketType ePacket,
-                 uint32_t validPackets,
+                 Mask<XFA_XDPPACKET> validPackets,
                  XFA_ObjectType oType,
                  XFA_Element eType,
                  pdfium::span<const PropertyData> properties,
                  pdfium::span<const AttributeData> attributes,
-                 std::unique_ptr<CJX_Object> js_node);
+                 CJX_Object* js_node);
 
- private:
   void Stroke(const std::vector<CXFA_Stroke*>& strokes,
-              CXFA_Graphics* pGS,
+              CFGAS_GEGraphics* pGS,
               CFX_RectF rtWidget,
               const CFX_Matrix& matrix);
-  void StrokeEmbossed(CXFA_Graphics* pGS,
+  void StrokeEmbossed(CFGAS_GEGraphics* pGS,
                       CFX_RectF rt,
                       float fThickness,
                       const CFX_Matrix& matrix);
-  void StrokeLowered(CXFA_Graphics* pGS,
+  void StrokeLowered(CFGAS_GEGraphics* pGS,
                      CFX_RectF rt,
                      float fThickness,
                      const CFX_Matrix& matrix);
-  void StrokeRaised(CXFA_Graphics* pGS,
+  void StrokeRaised(CFGAS_GEGraphics* pGS,
                     CFX_RectF rt,
                     float fThickness,
                     const CFX_Matrix& matrix);
-  void StrokeEtched(CXFA_Graphics* pGS,
+  void StrokeEtched(CFGAS_GEGraphics* pGS,
                     CFX_RectF rt,
                     float fThickness,
                     const CFX_Matrix& matrix);
-  void StrokeRect(CXFA_Graphics* pGraphic,
+  void StrokeRect(CFGAS_GEGraphics* pGraphic,
                   const CFX_RectF& rt,
                   float fLineWidth,
                   const CFX_Matrix& matrix,
@@ -65,7 +66,7 @@ class CXFA_Rectangle : public CXFA_Box {
                   FX_ARGB argbBottomRight);
   void GetPath(const std::vector<CXFA_Stroke*>& strokes,
                CFX_RectF rtWidget,
-               CXFA_GEPath& path,
+               CFGAS_GEPath& path,
                int32_t nIndex,
                bool bStart,
                bool bCorner);
