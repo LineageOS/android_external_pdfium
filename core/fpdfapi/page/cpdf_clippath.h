@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,9 @@
 
 #include "core/fpdfapi/page/cpdf_path.h"
 #include "core/fxcrt/fx_coordinates.h"
+#include "core/fxcrt/retain_ptr.h"
 #include "core/fxcrt/shared_copy_on_write.h"
+#include "core/fxge/cfx_fillrenderoptions.h"
 
 class CPDF_TextObject;
 
@@ -35,11 +37,13 @@ class CPDF_ClipPath {
 
   size_t GetPathCount() const;
   CPDF_Path GetPath(size_t i) const;
-  uint8_t GetClipType(size_t i) const;
+  CFX_FillRenderOptions::FillType GetClipType(size_t i) const;
   size_t GetTextCount() const;
   CPDF_TextObject* GetText(size_t i) const;
   CFX_FloatRect GetClipBox() const;
-  void AppendPath(CPDF_Path path, uint8_t type, bool bAutoMerge);
+  void AppendPath(CPDF_Path path, CFX_FillRenderOptions::FillType type);
+  void AppendPathWithAutoMerge(CPDF_Path path,
+                               CFX_FillRenderOptions::FillType type);
   void AppendTexts(std::vector<std::unique_ptr<CPDF_TextObject>>* pTexts);
   void CopyClipPath(const CPDF_ClipPath& that);
   void Transform(const CFX_Matrix& matrix);
@@ -47,12 +51,12 @@ class CPDF_ClipPath {
  private:
   class PathData final : public Retainable {
    public:
-    template <typename T, typename... Args>
-    friend RetainPtr<T> pdfium::MakeRetain(Args&&... args);
+    CONSTRUCT_VIA_MAKE_RETAIN;
 
     RetainPtr<PathData> Clone() const;
 
-    using PathAndTypeData = std::pair<CPDF_Path, uint8_t>;
+    using PathAndTypeData =
+        std::pair<CPDF_Path, CFX_FillRenderOptions::FillType>;
 
     std::vector<PathAndTypeData> m_PathAndTypeList;
     std::vector<std::unique_ptr<CPDF_TextObject>> m_TextList;

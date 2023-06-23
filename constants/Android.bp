@@ -1,5 +1,9 @@
-cc_library_headers {
+cc_library_static {
     name: "libpdfium-constants",
+    defaults: ["pdfium-core"],
     export_include_dirs: ["."],
+    srcs: [
+        "*.cpp",
+    ],
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ class CXFA_Form;
 
 class CJX_Form final : public CJX_Model {
  public:
-  explicit CJX_Form(CXFA_Form* form);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CJX_Form() override;
 
   // CJX_Object:
@@ -30,6 +30,8 @@ class CJX_Form final : public CJX_Model {
   JSE_PROP(checksumS);
 
  private:
+  explicit CJX_Form(CXFA_Form* form);
+
   using Type__ = CJX_Form;
   using ParentType__ = CJX_Model;
 

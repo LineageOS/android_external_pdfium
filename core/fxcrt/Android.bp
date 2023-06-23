@@ -17,8 +17,13 @@ cc_library_static {
     exclude_srcs: [
         // is_win
         "cfx_fileaccess_windows.cpp",
+        "fx_folder_windows.cpp",
         // pdf_enable_xfa
         "cfx_memorystream.cpp",
+        // pdf_use_partition_alloc
+        "fx_memory_pa.cpp",
+        // test module
+        "fake_time_test.cpp",
     ],
 
     srcs: [

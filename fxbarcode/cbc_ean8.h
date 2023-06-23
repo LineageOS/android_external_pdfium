@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,10 @@
 #ifndef FXBARCODE_CBC_EAN8_H_
 #define FXBARCODE_CBC_EAN8_H_
 
-#include "core/fxcrt/fx_string.h"
-#include "core/fxcrt/fx_system.h"
-#include "fxbarcode/cbc_eancode.h"
+#include <stddef.h>
 
-class CBC_OnedEAN8Writer;
+#include "fxbarcode/BC_Library.h"
+#include "fxbarcode/cbc_eancode.h"
 
 class CBC_EAN8 final : public CBC_EANCode {
  public:
@@ -20,7 +19,6 @@ class CBC_EAN8 final : public CBC_EANCode {
 
   // CBC_EANCode:
   BC_TYPE GetType() override;
-  BCFORMAT GetFormat() const override;
   size_t GetMaxLength() const override;
 };
 

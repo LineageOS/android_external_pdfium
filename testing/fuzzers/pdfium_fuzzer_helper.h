@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,9 @@ class PDFiumFuzzerHelper {
   virtual int GetFormCallbackVersion() const = 0;
   virtual bool OnFormFillEnvLoaded(FPDF_DOCUMENT doc);
   virtual void OnRenderFinished(FPDF_DOCUMENT doc) {}
+  virtual void FormActionHandler(FPDF_FORMHANDLE form,
+                                 FPDF_DOCUMENT doc,
+                                 FPDF_PAGE page) {}
 
  protected:
   PDFiumFuzzerHelper();

@@ -1,4 +1,4 @@
-// Copyright 2018 PDFium Authors. All rights reserved.
+// Copyright 2018 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,8 @@
 
 namespace fxcodec {
 
-CFX_BmpContext::CFX_BmpContext(BmpModule* pModule,
-                               BmpModule::Delegate* pDelegate)
-    : m_Bmp(this), m_pModule(pModule), m_pDelegate(pDelegate) {}
+CFX_BmpContext::CFX_BmpContext(BmpDecoder::Delegate* pDelegate)
+    : m_Bmp(this), m_pDelegate(pDelegate) {}
 
 CFX_BmpContext::~CFX_BmpContext() = default;
 

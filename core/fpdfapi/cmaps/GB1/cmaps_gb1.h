@@ -1,4 +1,4 @@
-// Copyright 2015 PDFium Authors. All rights reserved.
+// Copyright 2015 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,23 +7,30 @@
 #ifndef CORE_FPDFAPI_CMAPS_GB1_CMAPS_GB1_H_
 #define CORE_FPDFAPI_CMAPS_GB1_CMAPS_GB1_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "core/fpdfapi/cmaps/fpdf_cmaps.h"
 
-extern const uint16_t g_FXCMAP_GB_EUC_H_0[];
-extern const uint16_t g_FXCMAP_GB_EUC_V_0[];
-extern const uint16_t g_FXCMAP_GBpc_EUC_H_0[];
-extern const uint16_t g_FXCMAP_GBpc_EUC_V_0[];
-extern const uint16_t g_FXCMAP_GBK_EUC_H_2[];
-extern const uint16_t g_FXCMAP_GBK_EUC_V_2[];
-extern const uint16_t g_FXCMAP_GBKp_EUC_H_2[];
-extern const uint16_t g_FXCMAP_GBKp_EUC_V_2[];
-extern const uint16_t g_FXCMAP_GBK2K_H_5[];
-extern const FXCMAP_DWordCIDMap g_FXCMAP_GBK2K_H_5_DWord[];
-extern const uint16_t g_FXCMAP_GBK2K_V_5[];
-extern const uint16_t g_FXCMAP_UniGB_UCS2_H_4[];
-extern const uint16_t g_FXCMAP_UniGB_UCS2_V_4[];
-extern const uint16_t g_FXCMAP_GB1CID2Unicode_5[30284];
-extern const FXCMAP_CMap g_FXCMAP_GB1_cmaps[];
-extern const size_t g_FXCMAP_GB1_cmaps_size;
+namespace fxcmap {
+
+extern const uint16_t kGB_EUC_H_0[];
+extern const uint16_t kGB_EUC_V_0[];
+extern const uint16_t kGBpc_EUC_H_0[];
+extern const uint16_t kGBpc_EUC_V_0[];
+extern const uint16_t kGBK_EUC_H_2[];
+extern const uint16_t kGBK_EUC_V_2[];
+extern const uint16_t kGBKp_EUC_H_2[];
+extern const uint16_t kGBKp_EUC_V_2[];
+extern const uint16_t kGBK2K_H_5[];
+extern const DWordCIDMap kGBK2K_H_5_DWord[];
+extern const uint16_t kGBK2K_V_5[];
+extern const uint16_t kUniGB_UCS2_H_4[];
+extern const uint16_t kUniGB_UCS2_V_4[];
+extern const uint16_t kGB1CID2Unicode_5[30284];
+extern const CMap kGB1_cmaps[];
+extern const size_t kGB1_cmaps_size;
+
+}  // namespace fxcmap
 
 #endif  // CORE_FPDFAPI_CMAPS_GB1_CMAPS_GB1_H_

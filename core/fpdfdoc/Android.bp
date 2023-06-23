@@ -2,11 +2,8 @@ cc_library_static {
     name: "libpdfium-fpdfdoc",
     defaults: ["pdfium-core"],
 
-    header_libs: [
-        "libpdfium-constants",
-    ],
-
     static_libs: [
+        "libpdfium-constants",
         "libpdfium-font",
         "libpdfium-page",
         "libpdfium-parser",

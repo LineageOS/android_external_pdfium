@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,16 @@
 #include "xfa/fxfa/parser/cxfa_desc.h"
 
 #include "fxjs/xfa/cjx_desc.h"
-#include "third_party/base/ptr_util.h"
+#include "xfa/fxfa/parser/cxfa_document.h"
 
 namespace {
 
 const CXFA_Node::PropertyData kDescPropertyData[] = {
-    {XFA_Element::Text, 1, 0},     {XFA_Element::Time, 1, 0},
-    {XFA_Element::DateTime, 1, 0}, {XFA_Element::Image, 1, 0},
-    {XFA_Element::Decimal, 1, 0},  {XFA_Element::Boolean, 1, 0},
-    {XFA_Element::Integer, 1, 0},  {XFA_Element::ExData, 1, 0},
-    {XFA_Element::Date, 1, 0},     {XFA_Element::Float, 1, 0},
+    {XFA_Element::Text, 1, {}},     {XFA_Element::Time, 1, {}},
+    {XFA_Element::DateTime, 1, {}}, {XFA_Element::Image, 1, {}},
+    {XFA_Element::Decimal, 1, {}},  {XFA_Element::Boolean, 1, {}},
+    {XFA_Element::Integer, 1, {}},  {XFA_Element::ExData, 1, {}},
+    {XFA_Element::Date, 1, {}},     {XFA_Element::Float, 1, {}},
 };
 
 const CXFA_Node::AttributeData kDescAttributeData[] = {
@@ -30,11 +30,13 @@ const CXFA_Node::AttributeData kDescAttributeData[] = {
 CXFA_Desc::CXFA_Desc(CXFA_Document* doc, XFA_PacketType packet)
     : CXFA_Node(doc,
                 packet,
-                (XFA_XDPPACKET_Template | XFA_XDPPACKET_Form),
+                {XFA_XDPPACKET::kTemplate, XFA_XDPPACKET::kForm},
                 XFA_ObjectType::Node,
                 XFA_Element::Desc,
                 kDescPropertyData,
                 kDescAttributeData,
-                pdfium::MakeUnique<CJX_Desc>(this)) {}
+                cppgc::MakeGarbageCollected<CJX_Desc>(
+                    doc->GetHeap()->GetAllocationHandle(),
+                    this)) {}
 
 CXFA_Desc::~CXFA_Desc() = default;

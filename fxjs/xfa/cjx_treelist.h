@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ class CXFA_TreeList;
 
 class CJX_TreeList final : public CJX_List {
  public:
-  explicit CJX_TreeList(CXFA_TreeList* list);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CJX_TreeList() override;
 
   // CJX_Object:
@@ -23,6 +23,8 @@ class CJX_TreeList final : public CJX_List {
   JSE_METHOD(namedItem);
 
  private:
+  explicit CJX_TreeList(CXFA_TreeList* list);
+
   using Type__ = CJX_TreeList;
   using ParentType__ = CJX_List;
 

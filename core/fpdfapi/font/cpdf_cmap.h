@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,27 +7,35 @@
 #ifndef CORE_FPDFAPI_FONT_CPDF_CMAP_H_
 #define CORE_FPDFAPI_FONT_CPDF_CMAP_H_
 
+#include <stdint.h>
+
 #include <vector>
 
 #include "core/fpdfapi/font/cpdf_cidfont.h"
+#include "core/fxcrt/fixed_zeroed_data_vector.h"
 #include "core/fxcrt/retain_ptr.h"
+#include "core/fxcrt/unowned_ptr.h"
 #include "third_party/base/span.h"
 
-struct FXCMAP_CMap;
+namespace fxcmap {
+struct CMap;
+}
 
-enum CIDCoding : uint8_t {
-  CIDCODING_UNKNOWN = 0,
-  CIDCODING_GB,
-  CIDCODING_BIG5,
-  CIDCODING_JIS,
-  CIDCODING_KOREA,
-  CIDCODING_UCS2,
-  CIDCODING_CID,
-  CIDCODING_UTF16,
+enum class CIDCoding : uint8_t {
+  kUNKNOWN = 0,
+  kGB,
+  kBIG5,
+  kJIS,
+  kKOREA,
+  kUCS2,
+  kCID,
+  kUTF16,
 };
 
 class CPDF_CMap final : public Retainable {
  public:
+  static constexpr size_t kDirectMapTableSize = 65536;
+
   enum CodingScheme : uint8_t {
     OneByte,
     TwoBytes,
@@ -47,8 +55,7 @@ class CPDF_CMap final : public Retainable {
     uint16_t m_StartCID;
   };
 
-  template <typename T, typename... Args>
-  friend RetainPtr<T> pdfium::MakeRetain(Args&&... args);
+  CONSTRUCT_VIA_MAKE_RETAIN;
 
   bool IsLoaded() const { return m_bLoaded; }
   bool IsVertWriting() const { return m_bVertical; }
@@ -65,13 +72,13 @@ class CPDF_CMap final : public Retainable {
   void SetAdditionalMappings(std::vector<CIDRange> mappings);
   void SetMixedFourByteLeadingRanges(std::vector<CodeRange> ranges);
 
-  int GetCoding() const { return m_Coding; }
-  const FXCMAP_CMap* GetEmbedMap() const { return m_pEmbedMap.Get(); }
+  CIDCoding GetCoding() const { return m_Coding; }
+  const fxcmap::CMap* GetEmbedMap() const { return m_pEmbedMap; }
   CIDSet GetCharset() const { return m_Charset; }
   void SetCharset(CIDSet set) { m_Charset = set; }
 
   void SetDirectCharcodeToCIDTable(size_t idx, uint16_t val) {
-    m_DirectCharcodeToCIDTable[idx] = val;
+    m_DirectCharcodeToCIDTable.writable_span()[idx] = val;
   }
   bool IsDirectCharcodeToCIDTableIsEmpty() const {
     return m_DirectCharcodeToCIDTable.empty();
@@ -86,12 +93,12 @@ class CPDF_CMap final : public Retainable {
   bool m_bVertical = false;
   CIDSet m_Charset = CIDSET_UNKNOWN;
   CodingScheme m_CodingScheme = TwoBytes;
-  int m_Coding = CIDCODING_UNKNOWN;
+  CIDCoding m_Coding = CIDCoding::kUNKNOWN;
   std::vector<bool> m_MixedTwoByteLeadingBytes;
   std::vector<CodeRange> m_MixedFourByteLeadingRanges;
-  std::vector<uint16_t> m_DirectCharcodeToCIDTable;
+  FixedZeroedDataVector<uint16_t> m_DirectCharcodeToCIDTable;
   std::vector<CIDRange> m_AdditionalCharcodeToCIDMappings;
-  UnownedPtr<const FXCMAP_CMap> m_pEmbedMap;
+  UnownedPtr<const fxcmap::CMap> m_pEmbedMap;
 };
 
 #endif  // CORE_FPDFAPI_FONT_CPDF_CMAP_H_

@@ -16,7 +16,8 @@ cc_library_static {
 
     exclude_srcs: [
         // pdf_enable_xfa
-        "progressivedecoder.cpp",
+        "progressive_decoder.cpp",
+        "jpeg/jpeg_progressive_decoder.cpp",
         // pdf_enable_xfa_bmp
         "bmp/*",
         // pdf_enable_xfa_gif

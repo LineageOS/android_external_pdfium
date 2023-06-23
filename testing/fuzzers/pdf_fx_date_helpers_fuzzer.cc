@@ -1,8 +1,6 @@
-// Copyright 2018 The PDFium Authors. All rights reserved.
+// Copyright 2018 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include <string>
 
 #include "core/fxcrt/widestring.h"
 #include "fxjs/fx_date_helpers.h"

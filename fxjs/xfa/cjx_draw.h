@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ class CXFA_Draw;
 
 class CJX_Draw final : public CJX_Container {
  public:
-  explicit CJX_Draw(CXFA_Draw* node);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CJX_Draw() override;
 
   // CJX_Object:
@@ -24,6 +24,8 @@ class CJX_Draw final : public CJX_Container {
   JSE_PROP(rawValue);
 
  private:
+  explicit CJX_Draw(CXFA_Draw* node);
+
   using Type__ = CJX_Draw;
   using ParentType__ = CJX_Container;
 
