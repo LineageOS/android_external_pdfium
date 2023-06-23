@@ -1,4 +1,4 @@
-// Copyright 2015 PDFium Authors. All rights reserved.
+// Copyright 2015 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -45,8 +45,5 @@ struct NullTermWstrFuncTestData {
 };
 
 }  // namespace pdfium
-
-void InitializePDFTestEnvironment();
-void DestroyPDFTestEnvironment();
 
 #endif  // TESTING_TEST_SUPPORT_H_

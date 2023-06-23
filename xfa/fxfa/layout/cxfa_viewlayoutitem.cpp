@@ -1,12 +1,10 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // Original code copyright 2014 Foxit Software Inc. http://www.foxitsoftware.com
 
 #include "xfa/fxfa/layout/cxfa_viewlayoutitem.h"
-
-#include <utility>
 
 #include "fxjs/xfa/cjx_object.h"
 #include "xfa/fxfa/cxfa_ffpageview.h"
@@ -16,17 +14,19 @@
 #include "xfa/fxfa/parser/cxfa_medium.h"
 #include "xfa/fxfa/parser/cxfa_node.h"
 
-CXFA_ViewLayoutItem::CXFA_ViewLayoutItem(
-    CXFA_Node* pNode,
-    std::unique_ptr<CXFA_FFPageView> pPageView)
-    : CXFA_LayoutItem(pNode, kViewItem), m_pFFPageView(std::move(pPageView)) {
+CXFA_ViewLayoutItem::CXFA_ViewLayoutItem(CXFA_Node* pNode,
+                                         CXFA_FFPageView* pPageView)
+    : CXFA_LayoutItem(pNode, kViewItem), m_pFFPageView(pPageView) {
   if (m_pFFPageView)
     m_pFFPageView->SetLayoutItem(this);
 }
 
-CXFA_ViewLayoutItem::~CXFA_ViewLayoutItem() {
-  if (m_pFFPageView)
-    m_pFFPageView->SetLayoutItem(nullptr);
+CXFA_ViewLayoutItem::~CXFA_ViewLayoutItem() = default;
+
+void CXFA_ViewLayoutItem::Trace(cppgc::Visitor* visitor) const {
+  CXFA_LayoutItem::Trace(visitor);
+  visitor->Trace(m_pOldSubform);
+  visitor->Trace(m_pFFPageView);
 }
 
 CXFA_LayoutProcessor* CXFA_ViewLayoutItem::GetLayout() const {
@@ -58,4 +58,8 @@ CFX_SizeF CXFA_ViewLayoutItem::GetPageSize() const {
 
 CXFA_Node* CXFA_ViewLayoutItem::GetMasterPage() const {
   return GetFormNode();
+}
+
+void CXFA_ViewLayoutItem::SetOldSubform(CXFA_Node* pSubform) {
+  m_pOldSubform = pSubform;
 }

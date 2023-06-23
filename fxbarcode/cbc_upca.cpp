@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,18 +24,13 @@
 #include <memory>
 
 #include "fxbarcode/oned/BC_OnedUPCAWriter.h"
-#include "third_party/base/ptr_util.h"
 
-CBC_UPCA::CBC_UPCA() : CBC_EANCode(pdfium::MakeUnique<CBC_OnedUPCAWriter>()) {}
+CBC_UPCA::CBC_UPCA() : CBC_EANCode(std::make_unique<CBC_OnedUPCAWriter>()) {}
 
 CBC_UPCA::~CBC_UPCA() = default;
 
 BC_TYPE CBC_UPCA::GetType() {
-  return BC_UPCA;
-}
-
-BCFORMAT CBC_UPCA::GetFormat() const {
-  return BCFORMAT_UPC_A;
+  return BC_TYPE::kUPCA;
 }
 
 size_t CBC_UPCA::GetMaxLength() const {

@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,18 @@
 #include "xfa/fxfa/cxfa_ffwidget.h"
 
 #include <algorithm>
-#include <cmath>
 #include <memory>
 #include <utility>
-#include <vector>
 
 #include "core/fxcodec/fx_codec.h"
-#include "core/fxcodec/progressivedecoder.h"
+#include "core/fxcodec/progressive_decoder.h"
 #include "core/fxcrt/maybe_owned.h"
-#include "core/fxge/cfx_pathdata.h"
+#include "core/fxge/cfx_fillrenderoptions.h"
+#include "core/fxge/cfx_path.h"
 #include "core/fxge/cfx_renderdevice.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
+#include "third_party/base/check.h"
+#include "xfa/fgas/graphics/cfgas_gegraphics.h"
 #include "xfa/fwl/fwl_widgethit.h"
 #include "xfa/fxfa/cxfa_eventparam.h"
 #include "xfa/fxfa/cxfa_ffapp.h"
@@ -33,14 +34,13 @@
 #include "xfa/fxfa/parser/cxfa_image.h"
 #include "xfa/fxfa/parser/cxfa_margin.h"
 #include "xfa/fxfa/parser/cxfa_node.h"
-#include "xfa/fxgraphics/cxfa_graphics.h"
 
 namespace {
 
 FXDIB_Format XFA_GetDIBFormat(FXCODEC_IMAGE_TYPE type,
                               int32_t iComponents,
                               int32_t iBitsPerComponent) {
-  FXDIB_Format dibFormat = FXDIB_Argb;
+  FXDIB_Format dibFormat = FXDIB_Format::kArgb;
   switch (type) {
     case FXCODEC_IMAGE_JPG:
 #ifdef PDF_ENABLE_XFA_BMP
@@ -50,10 +50,10 @@ FXDIB_Format XFA_GetDIBFormat(FXCODEC_IMAGE_TYPE type,
     case FXCODEC_IMAGE_TIFF:
 #endif  // PDF_ENABLE_XFA_TIFF
     {
-      dibFormat = FXDIB_Rgb32;
+      dibFormat = FXDIB_Format::kRgb32;
       int32_t bpp = iComponents * iBitsPerComponent;
       if (bpp <= 24) {
-        dibFormat = FXDIB_Rgb;
+        dibFormat = FXDIB_Format::kRgb;
       }
     } break;
 #ifdef PDF_ENABLE_XFA_PNG
@@ -65,28 +65,20 @@ FXDIB_Format XFA_GetDIBFormat(FXCODEC_IMAGE_TYPE type,
   return dibFormat;
 }
 
-bool IsFXCodecErrorStatus(FXCODEC_STATUS status) {
-  return (status == FXCODEC_STATUS_ERROR ||
-          status == FXCODEC_STATUS_ERR_MEMORY ||
-          status == FXCODEC_STATUS_ERR_READ ||
-          status == FXCODEC_STATUS_ERR_FLUSH ||
-          status == FXCODEC_STATUS_ERR_FORMAT ||
-          status == FXCODEC_STATUS_ERR_PARAMS);
-}
-
 }  // namespace
 
-void XFA_DrawImage(CXFA_Graphics* pGS,
+void XFA_DrawImage(CFGAS_GEGraphics* pGS,
                    const CFX_RectF& rtImage,
                    const CFX_Matrix& matrix,
-                   const RetainPtr<CFX_DIBitmap>& pDIBitmap,
+                   RetainPtr<CFX_DIBitmap> pDIBitmap,
                    XFA_AttributeValue iAspect,
                    const CFX_Size& dpi,
                    XFA_AttributeValue iHorzAlign,
                    XFA_AttributeValue iVertAlign) {
   if (rtImage.IsEmpty())
     return;
-  if (!pDIBitmap || !pDIBitmap->GetBuffer())
+
+  if (!pDIBitmap || pDIBitmap->GetBuffer().empty())
     return;
 
   CFX_RectF rtFit(rtImage.TopLeft(),
@@ -134,42 +126,44 @@ void XFA_DrawImage(CXFA_Graphics* pGS,
 
   CFX_RenderDevice* pRenderDevice = pGS->GetRenderDevice();
   CFX_RenderDevice::StateRestorer restorer(pRenderDevice);
-  CFX_PathData path;
+  CFX_Path path;
   path.AppendRect(rtImage.left, rtImage.bottom(), rtImage.right(), rtImage.top);
-  pRenderDevice->SetClip_PathFill(&path, &matrix, FXFILL_WINDING);
+  pRenderDevice->SetClip_PathFill(path, &matrix,
+                                  CFX_FillRenderOptions::WindingOptions());
 
   CFX_Matrix mtImage(1, 0, 0, -1, 0, 1);
   mtImage.Concat(
       CFX_Matrix(rtFit.width, 0, 0, rtFit.height, rtFit.left, rtFit.top));
   mtImage.Concat(matrix);
 
-  CXFA_ImageRenderer imageRender(pRenderDevice, pDIBitmap, &mtImage);
-  if (!imageRender.Start()) {
+  CXFA_ImageRenderer imageRender(pRenderDevice, std::move(pDIBitmap), mtImage);
+  if (!imageRender.Start())
     return;
-  }
+
   while (imageRender.Continue())
     continue;
 }
 
 RetainPtr<CFX_DIBitmap> XFA_LoadImageFromBuffer(
-    const RetainPtr<IFX_SeekableReadStream>& pImageFileRead,
+    RetainPtr<IFX_SeekableReadStream> pImageFileRead,
     FXCODEC_IMAGE_TYPE type,
     int32_t& iImageXDpi,
     int32_t& iImageYDpi) {
-  auto* pCodecMgr = fxcodec::ModuleMgr::GetInstance();
-  std::unique_ptr<ProgressiveDecoder> pProgressiveDecoder =
-      pCodecMgr->CreateProgressiveDecoder();
+  auto pProgressiveDecoder = std::make_unique<ProgressiveDecoder>();
 
   CFX_DIBAttribute dibAttr;
-  pProgressiveDecoder->LoadImageInfo(pImageFileRead, type, &dibAttr, false);
+  pProgressiveDecoder->LoadImageInfo(std::move(pImageFileRead), type, &dibAttr,
+                                     false);
   switch (dibAttr.m_wDPIUnit) {
-    case FXCODEC_RESUNIT_CENTIMETER:
-      dibAttr.m_nXDPI = (int32_t)(dibAttr.m_nXDPI * 2.54f);
-      dibAttr.m_nYDPI = (int32_t)(dibAttr.m_nYDPI * 2.54f);
+    case CFX_DIBAttribute::kResUnitCentimeter:
+      dibAttr.m_nXDPI = static_cast<int32_t>(dibAttr.m_nXDPI * 2.54f);
+      dibAttr.m_nYDPI = static_cast<int32_t>(dibAttr.m_nYDPI * 2.54f);
       break;
-    case FXCODEC_RESUNIT_METER:
-      dibAttr.m_nXDPI = (int32_t)(dibAttr.m_nXDPI / (float)100 * 2.54f);
-      dibAttr.m_nYDPI = (int32_t)(dibAttr.m_nYDPI / (float)100 * 2.54f);
+    case CFX_DIBAttribute::kResUnitMeter:
+      dibAttr.m_nXDPI =
+          static_cast<int32_t>(dibAttr.m_nXDPI / (float)100 * 2.54f);
+      dibAttr.m_nYDPI =
+          static_cast<int32_t>(dibAttr.m_nYDPI / (float)100 * 2.54f);
       break;
     default:
       break;
@@ -193,24 +187,18 @@ RetainPtr<CFX_DIBitmap> XFA_LoadImageFromBuffer(
   size_t nFrames;
   FXCODEC_STATUS status;
   std::tie(status, nFrames) = pProgressiveDecoder->GetFrames();
-  if (status != FXCODEC_STATUS_DECODE_READY || nFrames == 0) {
-    pBitmap = nullptr;
-    return pBitmap;
-  }
+  if (status != FXCODEC_STATUS::kDecodeReady || nFrames == 0)
+    return nullptr;
 
   status = pProgressiveDecoder->StartDecode(pBitmap, 0, 0, pBitmap->GetWidth(),
                                             pBitmap->GetHeight());
-  if (IsFXCodecErrorStatus(status)) {
-    pBitmap = nullptr;
-    return pBitmap;
-  }
+  if (status == FXCODEC_STATUS::kError)
+    return nullptr;
 
-  while (status == FXCODEC_STATUS_DECODE_TOBECONTINUE) {
+  while (status == FXCODEC_STATUS::kDecodeToBeContinued) {
     status = pProgressiveDecoder->ContinueDecode();
-    if (IsFXCodecErrorStatus(status)) {
-      pBitmap = nullptr;
-      return pBitmap;
-    }
+    if (status == FXCODEC_STATUS::kError)
+      return nullptr;
   }
 
   return pBitmap;
@@ -224,22 +212,26 @@ void XFA_RectWithoutMargin(CFX_RectF* rt, const CXFA_Margin* margin) {
               margin->GetRightInset(), margin->GetBottomInset());
 }
 
-CXFA_FFWidget* XFA_GetWidgetFromLayoutItem(CXFA_LayoutItem* pLayoutItem) {
+// static
+CXFA_FFWidget* CXFA_FFWidget::FromLayoutItem(CXFA_LayoutItem* pLayoutItem) {
   if (!pLayoutItem->GetFormNode()->HasCreatedUIWidget())
     return nullptr;
 
   return GetFFWidget(ToContentLayoutItem(pLayoutItem));
 }
 
-CXFA_CalcData::CXFA_CalcData() = default;
-
-CXFA_CalcData::~CXFA_CalcData() = default;
-
 CXFA_FFWidget::CXFA_FFWidget(CXFA_Node* node) : m_pNode(node) {}
 
 CXFA_FFWidget::~CXFA_FFWidget() = default;
 
-const CFWL_App* CXFA_FFWidget::GetFWLApp() {
+void CXFA_FFWidget::Trace(cppgc::Visitor* visitor) const {
+  visitor->Trace(m_pLayoutItem);
+  visitor->Trace(m_pDocView);
+  visitor->Trace(m_pPageView);
+  visitor->Trace(m_pNode);
+}
+
+CFWL_App* CXFA_FFWidget::GetFWLApp() const {
   return GetPageView()->GetDocView()->GetDoc()->GetApp()->GetFWLApp();
 }
 
@@ -248,15 +240,15 @@ CXFA_FFWidget* CXFA_FFWidget::GetNextFFWidget() const {
 }
 
 const CFX_RectF& CXFA_FFWidget::GetWidgetRect() const {
-  if (!GetLayoutItem()->TestStatusBits(XFA_WidgetStatus_RectCached))
+  if (!GetLayoutItem()->TestStatusBits(XFA_WidgetStatus::kRectCached))
     RecacheWidgetRect();
-  return m_rtWidget;
+  return m_WidgetRect;
 }
 
 const CFX_RectF& CXFA_FFWidget::RecacheWidgetRect() const {
-  GetLayoutItem()->SetStatusBits(XFA_WidgetStatus_RectCached);
-  m_rtWidget = GetLayoutItem()->GetRect(false);
-  return m_rtWidget;
+  GetLayoutItem()->SetStatusBits(XFA_WidgetStatus::kRectCached);
+  m_WidgetRect = GetLayoutItem()->GetAbsoluteRect();
+  return m_WidgetRect;
 }
 
 CFX_RectF CXFA_FFWidget::GetRectWithoutRotate() {
@@ -283,7 +275,8 @@ CFX_RectF CXFA_FFWidget::GetRectWithoutRotate() {
   return rtWidget;
 }
 
-void CXFA_FFWidget::ModifyStatus(uint32_t dwAdded, uint32_t dwRemoved) {
+void CXFA_FFWidget::ModifyStatus(Mask<XFA_WidgetStatus> dwAdded,
+                                 Mask<XFA_WidgetStatus> dwRemoved) {
   GetLayoutItem()->ClearStatusBits(dwRemoved);
   GetLayoutItem()->SetStatusBits(dwAdded);
 }
@@ -298,7 +291,7 @@ CFX_RectF CXFA_FFWidget::GetBBox(FocusOption focus) {
   return m_pPageView->GetPageViewRect();
 }
 
-void CXFA_FFWidget::RenderWidget(CXFA_Graphics* pGS,
+void CXFA_FFWidget::RenderWidget(CFGAS_GEGraphics* pGS,
                                  const CFX_Matrix& matrix,
                                  HighlightOption highlight) {
   if (!HasVisibleStatus())
@@ -347,11 +340,10 @@ bool CXFA_FFWidget::ProcessEventUnderHandler(CXFA_EventParam* params,
   if (!pNode->IsWidgetReady())
     return false;
 
-  params->m_pTarget = pNode;
   return pHandler->ProcessEvent(pNode, params) == XFA_EventError::kSuccess;
 }
 
-void CXFA_FFWidget::DrawBorder(CXFA_Graphics* pGS,
+void CXFA_FFWidget::DrawBorder(CFGAS_GEGraphics* pGS,
                                CXFA_Box* box,
                                const CFX_RectF& rtBorder,
                                const CFX_Matrix& matrix) {
@@ -359,7 +351,7 @@ void CXFA_FFWidget::DrawBorder(CXFA_Graphics* pGS,
     box->Draw(pGS, rtBorder, matrix, false);
 }
 
-void CXFA_FFWidget::DrawBorderWithFlag(CXFA_Graphics* pGS,
+void CXFA_FFWidget::DrawBorderWithFlag(CFGAS_GEGraphics* pGS,
                                        CXFA_Box* box,
                                        const CFX_RectF& rtBorder,
                                        const CFX_Matrix& matrix,
@@ -382,100 +374,88 @@ bool CXFA_FFWidget::OnMouseExit() {
   return false;
 }
 
-bool CXFA_FFWidget::AcceptsFocusOnButtonDown(uint32_t dwFlags,
-                                             const CFX_PointF& point,
-                                             FWL_MouseCommand command) {
+bool CXFA_FFWidget::AcceptsFocusOnButtonDown(
+    Mask<XFA_FWL_KeyFlag> dwFlags,
+    const CFX_PointF& point,
+    CFWL_MessageMouse::MouseCommand command) {
   return false;
 }
 
-bool CXFA_FFWidget::OnLButtonDown(uint32_t dwFlags, const CFX_PointF& point) {
+bool CXFA_FFWidget::OnLButtonDown(Mask<XFA_FWL_KeyFlag> dwFlags,
+                                  const CFX_PointF& point) {
   return false;
 }
 
-bool CXFA_FFWidget::OnLButtonUp(uint32_t dwFlags, const CFX_PointF& point) {
+bool CXFA_FFWidget::OnLButtonUp(Mask<XFA_FWL_KeyFlag> dwFlags,
+                                const CFX_PointF& point) {
   return false;
 }
 
-bool CXFA_FFWidget::OnLButtonDblClk(uint32_t dwFlags, const CFX_PointF& point) {
+bool CXFA_FFWidget::OnLButtonDblClk(Mask<XFA_FWL_KeyFlag> dwFlags,
+                                    const CFX_PointF& point) {
   return false;
 }
 
-bool CXFA_FFWidget::OnMouseMove(uint32_t dwFlags, const CFX_PointF& point) {
+bool CXFA_FFWidget::OnMouseMove(Mask<XFA_FWL_KeyFlag> dwFlags,
+                                const CFX_PointF& point) {
   return false;
 }
 
-bool CXFA_FFWidget::OnMouseWheel(uint32_t dwFlags,
-                                 int16_t zDelta,
-                                 const CFX_PointF& point) {
+bool CXFA_FFWidget::OnMouseWheel(Mask<XFA_FWL_KeyFlag> dwFlags,
+                                 const CFX_PointF& point,
+                                 const CFX_Vector& delta) {
   return false;
 }
 
-bool CXFA_FFWidget::OnRButtonDown(uint32_t dwFlags, const CFX_PointF& point) {
+bool CXFA_FFWidget::OnRButtonDown(Mask<XFA_FWL_KeyFlag> dwFlags,
+                                  const CFX_PointF& point) {
   return false;
 }
 
-bool CXFA_FFWidget::OnRButtonUp(uint32_t dwFlags, const CFX_PointF& point) {
+bool CXFA_FFWidget::OnRButtonUp(Mask<XFA_FWL_KeyFlag> dwFlags,
+                                const CFX_PointF& point) {
   return false;
 }
 
-bool CXFA_FFWidget::OnRButtonDblClk(uint32_t dwFlags, const CFX_PointF& point) {
+bool CXFA_FFWidget::OnRButtonDblClk(Mask<XFA_FWL_KeyFlag> dwFlags,
+                                    const CFX_PointF& point) {
   return false;
 }
 
 bool CXFA_FFWidget::OnSetFocus(CXFA_FFWidget* pOldWidget) {
-  // OnSetFocus event may remove this widget.
-  ObservedPtr<CXFA_FFWidget> pWatched(this);
   CXFA_FFWidget* pParent = GetFFWidget(ToContentLayoutItem(GetParent()));
   if (pParent && !pParent->IsAncestorOf(pOldWidget)) {
     if (!pParent->OnSetFocus(pOldWidget))
       return false;
   }
-  if (!pWatched)
-    return false;
-
-  GetLayoutItem()->SetStatusBits(XFA_WidgetStatus_Focused);
+  GetLayoutItem()->SetStatusBits(XFA_WidgetStatus::kFocused);
 
   CXFA_EventParam eParam;
   eParam.m_eType = XFA_EVENT_Enter;
-  eParam.m_pTarget = m_pNode.Get();
   m_pNode->ProcessEvent(GetDocView(), XFA_AttributeValue::Enter, &eParam);
-
-  return !!pWatched;
+  return true;
 }
 
 bool CXFA_FFWidget::OnKillFocus(CXFA_FFWidget* pNewWidget) {
-  // OnKillFocus event may remove these widgets.
-  ObservedPtr<CXFA_FFWidget> pWatched(this);
-  ObservedPtr<CXFA_FFWidget> pNewWatched(pNewWidget);
-  GetLayoutItem()->ClearStatusBits(XFA_WidgetStatus_Focused);
+  GetLayoutItem()->ClearStatusBits(XFA_WidgetStatus::kFocused);
   EventKillFocus();
-  if (!pWatched)
-    return false;
-
   if (!pNewWidget)
     return true;
 
-  if (!pNewWatched)
-    return false;
-
-  // OnKillFocus event may remove |pNewWidget|.
   CXFA_FFWidget* pParent = GetFFWidget(ToContentLayoutItem(GetParent()));
   if (pParent && !pParent->IsAncestorOf(pNewWidget)) {
     if (!pParent->OnKillFocus(pNewWidget))
       return false;
   }
-  return pWatched && pNewWatched;
+  return true;
 }
 
-bool CXFA_FFWidget::OnKeyDown(uint32_t dwKeyCode, uint32_t dwFlags) {
+bool CXFA_FFWidget::OnKeyDown(XFA_FWL_VKEYCODE dwKeyCode,
+                              Mask<XFA_FWL_KeyFlag> dwFlags) {
   return false;
 }
 
-bool CXFA_FFWidget::OnKeyUp(uint32_t dwKeyCode, uint32_t dwFlags) {
-  return false;
-}
-
-bool CXFA_FFWidget::OnChar(uint32_t dwChar, uint32_t dwFlags) {
+bool CXFA_FFWidget::OnChar(uint32_t dwChar, Mask<XFA_FWL_KeyFlag> dwFlags) {
   return false;
 }
 
@@ -483,23 +463,11 @@ FWL_WidgetHit CXFA_FFWidget::HitTest(const CFX_PointF& point) {
   return FWL_WidgetHit::Unknown;
 }
 
-bool CXFA_FFWidget::OnSetCursor(const CFX_PointF& point) {
-  return false;
-}
-
 bool CXFA_FFWidget::CanUndo() {
   return false;
 }
 
 bool CXFA_FFWidget::CanRedo() {
-  return false;
-}
-
-bool CXFA_FFWidget::Undo() {
-  return false;
-}
-
-bool CXFA_FFWidget::Redo() {
   return false;
 }
 
@@ -527,12 +495,20 @@ bool CXFA_FFWidget::CanDeSelect() {
   return CanCopy();
 }
 
-Optional<WideString> CXFA_FFWidget::Copy() {
-  return {};
+bool CXFA_FFWidget::Undo() {
+  return false;
 }
 
-Optional<WideString> CXFA_FFWidget::Cut() {
-  return {};
+bool CXFA_FFWidget::Redo() {
+  return false;
+}
+
+absl::optional<WideString> CXFA_FFWidget::Copy() {
+  return absl::nullopt;
+}
+
+absl::optional<WideString> CXFA_FFWidget::Cut() {
+  return absl::nullopt;
 }
 
 bool CXFA_FFWidget::Paste(const WideString& wsPaste) {
@@ -598,15 +574,11 @@ CFX_Matrix CXFA_FFWidget::GetRotateMatrix() {
 }
 
 void CXFA_FFWidget::DisplayCaret(bool bVisible, const CFX_RectF* pRtAnchor) {
-  IXFA_DocEnvironment* pDocEnvironment = GetDoc()->GetDocEnvironment();
-  if (!pDocEnvironment)
-    return;
-
-  pDocEnvironment->DisplayCaret(this, bVisible, pRtAnchor);
+  GetDoc()->DisplayCaret(this, bVisible, pRtAnchor);
 }
 
 void CXFA_FFWidget::GetBorderColorAndThickness(FX_ARGB* cr, float* fWidth) {
-  ASSERT(GetNode()->IsWidgetReady());
+  DCHECK(GetNode()->IsWidgetReady());
   CXFA_Border* borderUI = GetNode()->GetUIBorder();
   if (!borderUI)
     return;
@@ -629,7 +601,7 @@ CXFA_LayoutItem* CXFA_FFWidget::GetParent() {
   if (!pParentNode)
     return nullptr;
 
-  CXFA_LayoutProcessor* layout = GetDocView()->GetXFALayout();
+  CXFA_LayoutProcessor* layout = GetDocView()->GetLayoutProcessor();
   return layout->GetLayoutItem(pParentNode);
 }
 
@@ -659,34 +631,33 @@ CXFA_FFApp* CXFA_FFWidget::GetApp() {
   return GetDoc()->GetApp();
 }
 
-IXFA_AppProvider* CXFA_FFWidget::GetAppProvider() {
+CXFA_FFApp::CallbackIface* CXFA_FFWidget::GetAppProvider() {
   return GetApp()->GetAppProvider();
 }
 
 bool CXFA_FFWidget::HasVisibleStatus() const {
-  return GetLayoutItem()->TestStatusBits(XFA_WidgetStatus_Visible);
+  return GetLayoutItem()->TestStatusBits(XFA_WidgetStatus::kVisible);
 }
 
 void CXFA_FFWidget::EventKillFocus() {
   CXFA_ContentLayoutItem* pItem = GetLayoutItem();
-  if (pItem->TestStatusBits(XFA_WidgetStatus_Access)) {
-    pItem->ClearStatusBits(XFA_WidgetStatus_Access);
+  if (pItem->TestStatusBits(XFA_WidgetStatus::kAccess)) {
+    pItem->ClearStatusBits(XFA_WidgetStatus::kAccess);
     return;
   }
   CXFA_EventParam eParam;
   eParam.m_eType = XFA_EVENT_Exit;
-  eParam.m_pTarget = m_pNode.Get();
   m_pNode->ProcessEvent(GetDocView(), XFA_AttributeValue::Exit, &eParam);
 }
 
 bool CXFA_FFWidget::IsButtonDown() {
-  return GetLayoutItem()->TestStatusBits(XFA_WidgetStatus_ButtonDown);
+  return GetLayoutItem()->TestStatusBits(XFA_WidgetStatus::kButtonDown);
 }
 
 void CXFA_FFWidget::SetButtonDown(bool bSet) {
   CXFA_ContentLayoutItem* pItem = GetLayoutItem();
   if (bSet)
-    pItem->SetStatusBits(XFA_WidgetStatus_ButtonDown);
+    pItem->SetStatusBits(XFA_WidgetStatus::kButtonDown);
   else
-    pItem->ClearStatusBits(XFA_WidgetStatus_ButtonDown);
+    pItem->ClearStatusBits(XFA_WidgetStatus::kButtonDown);
 }

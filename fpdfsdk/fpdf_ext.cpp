@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,6 @@
 #include "core/fpdfdoc/cpdf_metadata.h"
 #include "core/fxcrt/fx_extension.h"
 #include "fpdfsdk/cpdfsdk_helpers.h"
-#include "third_party/base/ptr_util.h"
 
 static_assert(static_cast<int>(UnsupportedFeature::kDocumentXFAForm) ==
                   FPDF_UNSP_DOC_XFAFORM,
@@ -91,7 +90,7 @@ FPDF_EXPORT int FPDF_CALLCONV FPDFDoc_GetPageMode(FPDF_DOCUMENT document) {
   if (!pRoot)
     return PAGEMODE_UNKNOWN;
 
-  const CPDF_Object* pName = pRoot->GetObjectFor("PageMode");
+  RetainPtr<const CPDF_Object> pName = pRoot->GetObjectFor("PageMode");
   if (!pName)
     return PAGEMODE_USENONE;
 

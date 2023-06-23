@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,34 +7,32 @@
 #ifndef XFA_FWL_CFWL_MESSAGE_H_
 #define XFA_FWL_CFWL_MESSAGE_H_
 
-#include <memory>
+#include "core/fxcrt/mask.h"
+#include "core/fxcrt/unowned_ptr.h"
+#include "v8/include/cppgc/macros.h"
 
-#include "core/fxcrt/fx_string.h"
-#include "core/fxcrt/fx_system.h"
-#include "core/fxcrt/observed_ptr.h"
-#include "xfa/fwl/cfwl_widget.h"
+class CFWL_Widget;
 
 class CFWL_Message {
+  CPPGC_STACK_ALLOCATED();  // Allow Raw/Unowned pointers.
+
  public:
-  enum class Type { Key, KillFocus, Mouse, MouseWheel, SetFocus };
+  enum class Type { kKey, kKillFocus, kMouse, kMouseWheel, kSetFocus };
 
   virtual ~CFWL_Message();
 
   Type GetType() const { return m_type; }
-  CFWL_Widget* GetSrcTarget() const { return m_pSrcTarget.Get(); }
-  CFWL_Widget* GetDstTarget() const { return m_pDstTarget.Get(); }
-  void SetSrcTarget(CFWL_Widget* pWidget) { m_pSrcTarget.Reset(pWidget); }
-  void SetDstTarget(CFWL_Widget* pWidget) { m_pDstTarget.Reset(pWidget); }
+  CFWL_Widget* GetDstTarget() const { return m_pDstTarget; }
+  void SetDstTarget(CFWL_Widget* pWidget) { m_pDstTarget = pWidget; }
 
  protected:
-  CFWL_Message(Type type, CFWL_Widget* pSrcTarget, CFWL_Widget* pDstTarget);
+  CFWL_Message(Type type, CFWL_Widget* pDstTarget);
   CFWL_Message(const CFWL_Message& that) = delete;
   CFWL_Message& operator=(const CFWL_Message& that) = delete;
 
  private:
   const Type m_type;
-  ObservedPtr<CFWL_Widget> m_pSrcTarget;
-  ObservedPtr<CFWL_Widget> m_pDstTarget;
+  UnownedPtr<CFWL_Widget> m_pDstTarget;
 };
 
 #endif  // XFA_FWL_CFWL_MESSAGE_H_

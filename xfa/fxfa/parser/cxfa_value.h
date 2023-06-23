@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #ifndef XFA_FXFA_PARSER_CXFA_VALUE_H_
 #define XFA_FXFA_PARSER_CXFA_VALUE_H_
 
-#include "core/fxcrt/fx_string.h"
+#include "core/fxcrt/widestring.h"
 #include "xfa/fxfa/parser/cxfa_node.h"
 #include "xfa/fxfa/parser/cxfa_text.h"
 
@@ -19,7 +19,7 @@ class CXFA_Rectangle;
 
 class CXFA_Value final : public CXFA_Node {
  public:
-  CXFA_Value(CXFA_Document* doc, XFA_PacketType packet);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_Value() override;
 
   XFA_Element GetChildValueClassID() const;
@@ -30,6 +30,9 @@ class CXFA_Value final : public CXFA_Node {
   CXFA_Text* GetTextIfExists() const;
   CXFA_ExData* GetExDataIfExists() const;
   CXFA_Image* GetImageIfExists() const;
+
+ private:
+  CXFA_Value(CXFA_Document* doc, XFA_PacketType packet);
 };
 
 #endif  // XFA_FXFA_PARSER_CXFA_VALUE_H_

@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,11 +14,11 @@ TEST_F(FPDFExtEmbedderTest, PageModeUnknown) {
 }
 
 TEST_F(FPDFExtEmbedderTest, PageModeUseNone) {
-  EXPECT_TRUE(OpenDocument("hello_world.pdf"));
+  ASSERT_TRUE(OpenDocument("hello_world.pdf"));
   EXPECT_EQ(PAGEMODE_USENONE, FPDFDoc_GetPageMode(document()));
 }
 
 TEST_F(FPDFExtEmbedderTest, PageModeUseOutlines) {
-  EXPECT_TRUE(OpenDocument("use_outlines.pdf"));
+  ASSERT_TRUE(OpenDocument("use_outlines.pdf"));
   EXPECT_EQ(PAGEMODE_USEOUTLINES, FPDFDoc_GetPageMode(document()));
 }

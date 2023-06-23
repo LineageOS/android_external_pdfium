@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #define CORE_FPDFAPI_PAGE_CPDF_ALLSTATES_H_
 
 #include "core/fpdfapi/page/cpdf_graphicstates.h"
+#include "core/fxcrt/bytestring.h"
 #include "core/fxcrt/fx_coordinates.h"
-#include "core/fxcrt/fx_system.h"
 
 class CPDF_Array;
 class CPDF_Dictionary;
@@ -21,9 +21,11 @@ class CPDF_AllStates final : public CPDF_GraphicStates {
   ~CPDF_AllStates() override;
 
   void Copy(const CPDF_AllStates& src);
-  void ProcessExtGS(CPDF_Dictionary* pGS, CPDF_StreamContentParser* pParser);
+  void ProcessExtGS(const CPDF_Dictionary* pGS,
+                    CPDF_StreamContentParser* pParser);
   void SetLineDash(const CPDF_Array* pArray, float phase, float scale);
 
+  ByteString m_GraphicsResourceName;
   CFX_Matrix m_TextMatrix;
   CFX_Matrix m_CTM;
   CFX_Matrix m_ParentMatrix;

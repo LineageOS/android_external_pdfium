@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,12 +18,17 @@ class CXFA_Script final : public CXFA_Node {
     Unknown,
   };
 
-  CXFA_Script(CXFA_Document* doc, XFA_PacketType packet);
+  static CXFA_Script* FromNode(CXFA_Node* pNode);
+
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_Script() override;
 
   Type GetContentType();
   XFA_AttributeValue GetRunAt();
   WideString GetExpression();
+
+ private:
+  CXFA_Script(CXFA_Document* doc, XFA_PacketType packet);
 };
 
 #endif  // XFA_FXFA_PARSER_CXFA_SCRIPT_H_

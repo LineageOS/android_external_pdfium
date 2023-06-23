@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ class CXFA_Node;
 
 class CJX_Container : public CJX_Node {
  public:
-  explicit CJX_Container(CXFA_Node* node);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CJX_Container() override;
 
   // CJX_Object:
@@ -22,6 +22,9 @@ class CJX_Container : public CJX_Node {
 
   JSE_METHOD(getDelta);
   JSE_METHOD(getDeltas);
+
+ protected:
+  explicit CJX_Container(CXFA_Node* node);
 
  private:
   using Type__ = CJX_Container;

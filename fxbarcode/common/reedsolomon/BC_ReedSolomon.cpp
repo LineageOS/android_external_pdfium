@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,23 +27,21 @@
 
 #include "fxbarcode/common/reedsolomon/BC_ReedSolomonGF256.h"
 #include "fxbarcode/common/reedsolomon/BC_ReedSolomonGF256Poly.h"
-#include "third_party/base/ptr_util.h"
 
 CBC_ReedSolomonEncoder::CBC_ReedSolomonEncoder(CBC_ReedSolomonGF256* field)
     : m_field(field) {
-  m_cachedGenerators.push_back(pdfium::MakeUnique<CBC_ReedSolomonGF256Poly>(
-      m_field.Get(), std::vector<int32_t>{1}));
+  m_cachedGenerators.push_back(std::make_unique<CBC_ReedSolomonGF256Poly>(
+      m_field, std::vector<int32_t>{1}));
 }
 
-CBC_ReedSolomonEncoder::~CBC_ReedSolomonEncoder() {}
+CBC_ReedSolomonEncoder::~CBC_ReedSolomonEncoder() = default;
 
 CBC_ReedSolomonGF256Poly* CBC_ReedSolomonEncoder::BuildGenerator(
     size_t degree) {
   if (degree >= m_cachedGenerators.size()) {
     CBC_ReedSolomonGF256Poly* lastGenerator = m_cachedGenerators.back().get();
     for (size_t d = m_cachedGenerators.size(); d <= degree; ++d) {
-      CBC_ReedSolomonGF256Poly temp_poly(m_field.Get(),
-                                         {1, m_field->Exp(d - 1)});
+      CBC_ReedSolomonGF256Poly temp_poly(m_field, {1, m_field->Exp(d - 1)});
       auto nextGenerator = lastGenerator->Multiply(&temp_poly);
       if (!nextGenerator)
         return nullptr;
@@ -72,7 +70,7 @@ bool CBC_ReedSolomonEncoder::Encode(std::vector<int32_t>* toEncode,
   for (size_t x = 0; x < dataBytes; x++)
     infoCoefficients[x] = (*toEncode)[x];
 
-  CBC_ReedSolomonGF256Poly info(m_field.Get(), infoCoefficients);
+  CBC_ReedSolomonGF256Poly info(m_field, infoCoefficients);
   auto infoTemp = info.MultiplyByMonomial(ecBytes, 1);
   if (!infoTemp)
     return false;
