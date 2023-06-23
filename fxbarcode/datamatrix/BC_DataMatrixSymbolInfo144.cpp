@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,14 +21,21 @@
  */
 
 #include "fxbarcode/datamatrix/BC_DataMatrixSymbolInfo144.h"
+
 #include "fxbarcode/datamatrix/BC_Encoder.h"
 #include "fxbarcode/datamatrix/BC_SymbolInfo.h"
 
+namespace {
+
+constexpr CBC_SymbolInfo::Data kSymbolDatum = {1558, 620, -1, 62, 22, 22, 36};
+
+}  // namespace
+
 CBC_DataMatrixSymbolInfo144::CBC_DataMatrixSymbolInfo144()
-    : CBC_SymbolInfo(1558, 620, 22, 22, 36, -1, 62) {}
+    : CBC_SymbolInfo(&kSymbolDatum) {}
 
-CBC_DataMatrixSymbolInfo144::~CBC_DataMatrixSymbolInfo144() {}
+CBC_DataMatrixSymbolInfo144::~CBC_DataMatrixSymbolInfo144() = default;
 
-size_t CBC_DataMatrixSymbolInfo144::getInterleavedBlockCount() const {
+size_t CBC_DataMatrixSymbolInfo144::GetInterleavedBlockCount() const {
   return 10;
 }

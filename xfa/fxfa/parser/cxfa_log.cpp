@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,15 @@
 #include "xfa/fxfa/parser/cxfa_log.h"
 
 #include "fxjs/xfa/cjx_node.h"
-#include "third_party/base/ptr_util.h"
+#include "xfa/fxfa/parser/cxfa_document.h"
 
 namespace {
 
 const CXFA_Node::PropertyData kLogPropertyData[] = {
-    {XFA_Element::To, 1, 0},
-    {XFA_Element::Uri, 1, 0},
-    {XFA_Element::Mode, 1, 0},
-    {XFA_Element::Threshold, 1, 0},
+    {XFA_Element::To, 1, {}},
+    {XFA_Element::Uri, 1, {}},
+    {XFA_Element::Mode, 1, {}},
+    {XFA_Element::Threshold, 1, {}},
 };
 
 const CXFA_Node::AttributeData kLogAttributeData[] = {
@@ -28,11 +28,13 @@ const CXFA_Node::AttributeData kLogAttributeData[] = {
 CXFA_Log::CXFA_Log(CXFA_Document* doc, XFA_PacketType packet)
     : CXFA_Node(doc,
                 packet,
-                XFA_XDPPACKET_Config,
+                XFA_XDPPACKET::kConfig,
                 XFA_ObjectType::Node,
                 XFA_Element::Log,
                 kLogPropertyData,
                 kLogAttributeData,
-                pdfium::MakeUnique<CJX_Node>(this)) {}
+                cppgc::MakeGarbageCollected<CJX_Node>(
+                    doc->GetHeap()->GetAllocationHandle(),
+                    this)) {}
 
 CXFA_Log::~CXFA_Log() = default;

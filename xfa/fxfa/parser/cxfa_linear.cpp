@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,17 @@
 
 #include "xfa/fxfa/parser/cxfa_linear.h"
 
-#include "core/fxge/render_defines.h"
 #include "fxjs/xfa/cjx_node.h"
-#include "third_party/base/ptr_util.h"
+#include "xfa/fgas/graphics/cfgas_gegraphics.h"
+#include "xfa/fgas/graphics/cfgas_geshading.h"
 #include "xfa/fxfa/parser/cxfa_color.h"
-#include "xfa/fxgraphics/cxfa_geshading.h"
+#include "xfa/fxfa/parser/cxfa_document.h"
 
 namespace {
 
 const CXFA_Node::PropertyData kLinearPropertyData[] = {
-    {XFA_Element::Color, 1, 0},
-    {XFA_Element::Extras, 1, 0},
+    {XFA_Element::Color, 1, {}},
+    {XFA_Element::Extras, 1, {}},
 };
 
 const CXFA_Node::AttributeData kLinearAttributeData[] = {
@@ -32,12 +32,14 @@ const CXFA_Node::AttributeData kLinearAttributeData[] = {
 CXFA_Linear::CXFA_Linear(CXFA_Document* doc, XFA_PacketType packet)
     : CXFA_Node(doc,
                 packet,
-                (XFA_XDPPACKET_Template | XFA_XDPPACKET_Form),
+                {XFA_XDPPACKET::kTemplate, XFA_XDPPACKET::kForm},
                 XFA_ObjectType::Node,
                 XFA_Element::Linear,
                 kLinearPropertyData,
                 kLinearAttributeData,
-                pdfium::MakeUnique<CJX_Node>(this)) {}
+                cppgc::MakeGarbageCollected<CJX_Node>(
+                    doc->GetHeap()->GetAllocationHandle(),
+                    this)) {}
 
 CXFA_Linear::~CXFA_Linear() = default;
 
@@ -51,8 +53,8 @@ CXFA_Color* CXFA_Linear::GetColorIfExists() {
   return GetChild<CXFA_Color>(0, XFA_Element::Color, false);
 }
 
-void CXFA_Linear::Draw(CXFA_Graphics* pGS,
-                       CXFA_GEPath* fillPath,
+void CXFA_Linear::Draw(CFGAS_GEGraphics* pGS,
+                       const CFGAS_GEPath& fillPath,
                        FX_ARGB crStart,
                        const CFX_RectF& rtFill,
                        const CFX_Matrix& matrix) {
@@ -82,10 +84,8 @@ void CXFA_Linear::Draw(CXFA_Graphics* pGS,
       break;
   }
 
-  CXFA_GEShading shading(ptStart, ptEnd, false, false, crStart, crEnd);
-
-  pGS->SaveGraphState();
-  pGS->SetFillColor(CXFA_GEColor(&shading));
-  pGS->FillPath(fillPath, FXFILL_WINDING, &matrix);
-  pGS->RestoreGraphState();
+  CFGAS_GEShading shading(ptStart, ptEnd, false, false, crStart, crEnd);
+  CFGAS_GEGraphics::StateRestorer restorer(pGS);
+  pGS->SetFillColor(CFGAS_GEColor(&shading));
+  pGS->FillPath(fillPath, CFX_FillRenderOptions::FillType::kWinding, matrix);
 }

@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,6 +23,7 @@
 #include "fxbarcode/pdf417/BC_PDF417HighLevelEncoder.h"
 
 #include "core/fxcrt/fx_extension.h"
+#include "core/fxcrt/fx_string.h"
 #include "third_party/bigint/BigIntegerLibrary.hh"
 
 namespace {
@@ -52,11 +53,11 @@ constexpr int8_t kPunctuation[128] = {
     -1, -1, -1, -1, -1, -1, -1, -1, -1, 26, 21, 27, 9,  -1};
 
 bool IsAlphaUpperOrSpace(wchar_t ch) {
-  return ch == ' ' || (ch >= 'A' && ch <= 'Z');
+  return ch == ' ' || FXSYS_IsUpperASCII(ch);
 }
 
 bool IsAlphaLowerOrSpace(wchar_t ch) {
-  return ch == ' ' || (ch >= 'a' && ch <= 'z');
+  return ch == ' ' || FXSYS_IsLowerASCII(ch);
 }
 
 bool IsMixed(wchar_t ch) {
@@ -76,20 +77,19 @@ bool IsText(wchar_t ch) {
 }  // namespace
 
 // static
-Optional<WideString> CBC_PDF417HighLevelEncoder::EncodeHighLevel(
+absl::optional<WideString> CBC_PDF417HighLevelEncoder::EncodeHighLevel(
     WideStringView msg) {
-  ByteString bytes = FX_UTF8Encode(msg);
+  const ByteString bytes = FX_UTF8Encode(msg);
   size_t len = bytes.GetLength();
   WideString result;
   result.Reserve(len);
   for (size_t i = 0; i < len; i++) {
     wchar_t ch = bytes[i] & 0xff;
     if (ch == '?' && bytes[i] != '?')
-      return {};
+      return absl::nullopt;
 
     result += ch;
   }
-  std::vector<uint8_t> byteArr(bytes.begin(), bytes.end());
   len = result.GetLength();
   WideString sb;
   sb.Reserve(len);
@@ -115,18 +115,18 @@ Optional<WideString> CBC_PDF417HighLevelEncoder::EncodeHighLevel(
         textSubMode = EncodeText(result, p, t, textSubMode, &sb);
         p += t;
       } else {
-        Optional<size_t> b =
-            DetermineConsecutiveBinaryCount(result, &byteArr, p);
-        if (!b)
-          return {};
+        absl::optional<size_t> b =
+            DetermineConsecutiveBinaryCount(result, bytes.raw_span(), p);
+        if (!b.has_value())
+          return absl::nullopt;
 
         size_t b_value = b.value();
         if (b_value == 0)
           b_value = 1;
         if (b_value == 1 && encodingMode == EncodingMode::kText) {
-          EncodeBinary(byteArr, p, 1, EncodingMode::kText, &sb);
+          EncodeBinary(bytes.raw_span(), p, 1, EncodingMode::kText, &sb);
         } else {
-          EncodeBinary(byteArr, p, b_value, encodingMode, &sb);
+          EncodeBinary(bytes.raw_span(), p, b_value, encodingMode, &sb);
           encodingMode = EncodingMode::kByte;
           textSubMode = SubMode::kAlpha;
         }
@@ -352,9 +352,10 @@ size_t CBC_PDF417HighLevelEncoder::DetermineConsecutiveTextCount(
   return idx - startpos;
 }
 
-Optional<size_t> CBC_PDF417HighLevelEncoder::DetermineConsecutiveBinaryCount(
+absl::optional<size_t>
+CBC_PDF417HighLevelEncoder::DetermineConsecutiveBinaryCount(
     WideString msg,
-    std::vector<uint8_t>* bytes,
+    pdfium::span<const uint8_t> bytes,
     size_t startpos) {
   size_t len = msg.GetLength();
   size_t idx = startpos;
@@ -382,8 +383,8 @@ Optional<size_t> CBC_PDF417HighLevelEncoder::DetermineConsecutiveBinaryCount(
     if (textCount >= 5)
       return idx - startpos;
     ch = msg[idx];
-    if ((*bytes)[idx] == 63 && ch != '?')
-      return {};
+    if (bytes[idx] == 63 && ch != '?')
+      return absl::nullopt;
     idx++;
   }
   return idx - startpos;

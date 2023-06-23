@@ -1,8 +1,8 @@
-// Copyright 2016 The PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <cstdint>
+#include <stdint.h>
 
 #include "core/fpdfapi/page/cpdf_psengine.h"
 #include "third_party/base/span.h"

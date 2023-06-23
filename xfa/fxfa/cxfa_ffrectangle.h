@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,13 +11,16 @@
 
 class CXFA_FFRectangle final : public CXFA_FFWidget {
  public:
-  explicit CXFA_FFRectangle(CXFA_Node* pNode);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_FFRectangle() override;
 
   // CXFA_FFWidget
-  void RenderWidget(CXFA_Graphics* pGS,
+  void RenderWidget(CFGAS_GEGraphics* pGS,
                     const CFX_Matrix& matrix,
                     HighlightOption highlight) override;
+
+ private:
+  explicit CXFA_FFRectangle(CXFA_Node* pNode);
 };
 
 #endif  // XFA_FXFA_CXFA_FFRECTANGLE_H_

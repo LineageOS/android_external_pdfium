@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 #include "core/fpdfapi/parser/cpdf_boolean.h"
 
 #include "core/fxcrt/fx_stream.h"
-#include "third_party/base/ptr_util.h"
 
 CPDF_Boolean::CPDF_Boolean() = default;
 
@@ -35,15 +34,7 @@ void CPDF_Boolean::SetString(const ByteString& str) {
   m_bValue = (str == "true");
 }
 
-bool CPDF_Boolean::IsBoolean() const {
-  return true;
-}
-
-CPDF_Boolean* CPDF_Boolean::AsBoolean() {
-  return this;
-}
-
-const CPDF_Boolean* CPDF_Boolean::AsBoolean() const {
+CPDF_Boolean* CPDF_Boolean::AsMutableBoolean() {
   return this;
 }
 

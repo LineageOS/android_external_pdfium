@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,23 @@
 
 #include "xfa/fxfa/parser/cxfa_treelist.h"
 
-#include <memory>
-
 #include "core/fxcrt/fx_extension.h"
 #include "fxjs/xfa/cjx_treelist.h"
-#include "third_party/base/ptr_util.h"
+#include "xfa/fxfa/parser/cxfa_document.h"
 #include "xfa/fxfa/parser/cxfa_node.h"
 
-CXFA_TreeList::CXFA_TreeList(CXFA_Document* pDocument)
-    : CXFA_List(pDocument,
+CXFA_TreeList::CXFA_TreeList(CXFA_Document* doc)
+    : CXFA_List(doc,
                 XFA_ObjectType::TreeList,
                 XFA_Element::TreeList,
-                pdfium::MakeUnique<CJX_TreeList>(this)) {}
+                cppgc::MakeGarbageCollected<CJX_TreeList>(
+                    doc->GetHeap()->GetAllocationHandle(),
+                    this)) {}
 
 CXFA_TreeList::~CXFA_TreeList() = default;
 
 CXFA_Node* CXFA_TreeList::NamedItem(WideStringView wsName) {
-  uint32_t dwHashCode = FX_HashCode_GetW(wsName, false);
+  uint32_t dwHashCode = FX_HashCode_GetW(wsName);
   size_t count = GetLength();
   for (size_t i = 0; i < count; i++) {
     CXFA_Node* ret = Item(i);

@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -50,10 +50,11 @@ typedef enum {
   FPDF_TEXTRENDERMODE_LAST = FPDF_TEXTRENDERMODE_CLIP,
 } FPDF_TEXT_RENDERMODE;
 
-// PDF types - use incomplete types (never completed) just for API type safety.
+// PDF types - use incomplete types (never completed) to force API type safety.
 typedef struct fpdf_action_t__* FPDF_ACTION;
 typedef struct fpdf_annotation_t__* FPDF_ANNOTATION;
 typedef struct fpdf_attachment_t__* FPDF_ATTACHMENT;
+typedef struct fpdf_avail_t__* FPDF_AVAIL;
 typedef struct fpdf_bitmap_t__* FPDF_BITMAP;
 typedef struct fpdf_bookmark_t__* FPDF_BOOKMARK;
 typedef struct fpdf_clippath_t__* FPDF_CLIPPATH;
@@ -61,20 +62,24 @@ typedef struct fpdf_dest_t__* FPDF_DEST;
 typedef struct fpdf_document_t__* FPDF_DOCUMENT;
 typedef struct fpdf_font_t__* FPDF_FONT;
 typedef struct fpdf_form_handle_t__* FPDF_FORMHANDLE;
+typedef const struct fpdf_glyphpath_t__* FPDF_GLYPHPATH;
 typedef struct fpdf_javascript_action_t* FPDF_JAVASCRIPT_ACTION;
 typedef struct fpdf_link_t__* FPDF_LINK;
 typedef struct fpdf_page_t__* FPDF_PAGE;
 typedef struct fpdf_pagelink_t__* FPDF_PAGELINK;
 typedef struct fpdf_pageobject_t__* FPDF_PAGEOBJECT;  // (text, path, etc.)
 typedef struct fpdf_pageobjectmark_t__* FPDF_PAGEOBJECTMARK;
-typedef struct fpdf_pagerange_t__* FPDF_PAGERANGE;
+typedef const struct fpdf_pagerange_t__* FPDF_PAGERANGE;
 typedef const struct fpdf_pathsegment_t* FPDF_PATHSEGMENT;
-typedef void* FPDF_RECORDER;  // Passed into skia.
+typedef void* FPDF_RECORDER;  // Passed into Skia as a SkPictureRecorder.
 typedef struct fpdf_schhandle_t__* FPDF_SCHHANDLE;
+typedef const struct fpdf_signature_t__* FPDF_SIGNATURE;
 typedef struct fpdf_structelement_t__* FPDF_STRUCTELEMENT;
+typedef const struct fpdf_structelement_attr_t__* FPDF_STRUCTELEMENT_ATTR;
 typedef struct fpdf_structtree_t__* FPDF_STRUCTTREE;
 typedef struct fpdf_textpage_t__* FPDF_TEXTPAGE;
 typedef struct fpdf_widget_t__* FPDF_WIDGET;
+typedef struct fpdf_xobject_t__* FPDF_XOBJECT;
 
 // Basic data types
 typedef int FPDF_BOOL;
@@ -99,7 +104,7 @@ typedef const char* FPDF_BYTESTRING;
 
 // FPDFSDK always uses UTF-16LE encoded wide strings, each character uses 2
 // bytes (except surrogation), with the low byte first.
-typedef const unsigned short* FPDF_WIDESTRING;
+typedef const FPDF_WCHAR* FPDF_WIDESTRING;
 
 // Structure for persisting a string beyond the duration of a callback.
 // Note: although represented as a char*, string may be interpreted as
@@ -168,6 +173,17 @@ typedef struct FS_POINTF_ {
 // Const Pointer to FS_POINTF structure.
 typedef const FS_POINTF* FS_LPCPOINTF;
 
+typedef struct _FS_QUADPOINTSF {
+  FS_FLOAT x1;
+  FS_FLOAT y1;
+  FS_FLOAT x2;
+  FS_FLOAT y2;
+  FS_FLOAT x3;
+  FS_FLOAT y3;
+  FS_FLOAT x4;
+  FS_FLOAT y4;
+} FS_QUADPOINTSF;
+
 // Annotation enums.
 typedef int FPDF_ANNOTATION_SUBTYPE;
 typedef int FPDF_ANNOT_APPEARANCEMODE;
@@ -218,6 +234,15 @@ extern "C" {
 //          future.
 FPDF_EXPORT void FPDF_CALLCONV FPDF_InitLibrary();
 
+// PDF renderer types - Experimental.
+// Selection of 2D graphics library to use for rendering to FPDF_BITMAPs.
+typedef enum {
+  // Anti-Grain Geometry - https://sourceforge.net/projects/agg/
+  FPDF_RENDERERTYPE_AGG = 0,
+  // Skia - https://skia.org/
+  FPDF_RENDERERTYPE_SKIA = 1,
+} FPDF_RENDERER_TYPE;
+
 // Process-wide options for initializing the library.
 typedef struct FPDF_LIBRARY_CONFIG_ {
   // Version number of the interface. Currently must be 2.
@@ -232,7 +257,7 @@ typedef struct FPDF_LIBRARY_CONFIG_ {
 
   // Version 2.
 
-  // pointer to the v8::Isolate to use, or NULL to force PDFium to create one.
+  // Pointer to the v8::Isolate to use, or NULL to force PDFium to create one.
   void* m_pIsolate;
 
   // The embedder data slot to use in the v8::Isolate to store PDFium's
@@ -240,6 +265,22 @@ typedef struct FPDF_LIBRARY_CONFIG_ {
   // [0, |v8::Internals::kNumIsolateDataLots|). Note that 0 is fine for most
   // embedders.
   unsigned int m_v8EmbedderSlot;
+
+  // Version 3 - Experimental.
+
+  // Pointer to the V8::Platform to use.
+  void* m_pPlatform;
+
+  // Version 4 - Experimental.
+
+  // Explicit specification of core renderer to use. |m_RendererType| must be
+  // a valid value for |FPDF_LIBRARY_CONFIG| versions of this level or higher,
+  // or else the initialization will fail with an immediate crash.
+  // Note that use of a specified |FPDF_RENDERER_TYPE| value for which the
+  // corresponding render library is not included in the build will similarly
+  // fail with an immediate crash.
+  FPDF_RENDERER_TYPE m_RendererType;
+
 } FPDF_LIBRARY_CONFIG;
 
 // Function: FPDF_InitLibraryWithConfig
@@ -282,37 +323,9 @@ FPDF_EXPORT void FPDF_CALLCONV FPDF_SetSandBoxPolicy(FPDF_DWORD policy,
                                                      FPDF_BOOL enable);
 
 #if defined(_WIN32)
-#if defined(PDFIUM_PRINT_TEXT_WITH_GDI)
-// Pointer to a helper function to make |font| with |text| of |text_length|
-// accessible when printing text with GDI. This is useful in sandboxed
-// environments where PDFium's access to GDI may be restricted.
-typedef void (*PDFiumEnsureTypefaceCharactersAccessible)(const LOGFONT* font,
-                                                         const wchar_t* text,
-                                                         size_t text_length);
-
-// Function: FPDF_SetTypefaceAccessibleFunc
-//          Set the function pointer that makes GDI fonts available in sandboxed
-//          environments. Experimental API.
-// Parameters:
-//          func -   A function pointer. See description above.
-// Return value:
-//          None.
-FPDF_EXPORT void FPDF_CALLCONV
-FPDF_SetTypefaceAccessibleFunc(PDFiumEnsureTypefaceCharactersAccessible func);
-
-// Function: FPDF_SetPrintTextWithGDI
-//          Set whether to use GDI to draw fonts when printing on Windows.
-//          Experimental API.
-// Parameters:
-//          use_gdi -   Set to true to enable printing text with GDI.
-// Return value:
-//          None.
-FPDF_EXPORT void FPDF_CALLCONV FPDF_SetPrintTextWithGDI(FPDF_BOOL use_gdi);
-#endif  // PDFIUM_PRINT_TEXT_WITH_GDI
-
+// Experimental API.
 // Function: FPDF_SetPrintMode
 //          Set printing mode when printing on Windows.
-//          Experimental API.
 // Parameters:
 //          mode - FPDF_PRINTMODE_EMF to output EMF (default)
 //                 FPDF_PRINTMODE_TEXTONLY to output text only (for charstream
@@ -325,6 +338,14 @@ FPDF_EXPORT void FPDF_CALLCONV FPDF_SetPrintTextWithGDI(FPDF_BOOL use_gdi);
 //                 PostScript via ExtEscape() in PASSTHROUGH mode.
 //                 FPDF_PRINTMODE_POSTSCRIPT3_PASSTHROUGH to output level 3
 //                 PostScript via ExtEscape() in PASSTHROUGH mode.
+//                 FPDF_PRINTMODE_EMF_IMAGE_MASKS to output EMF, with more
+//                 efficient processing of documents containing image masks.
+//                 FPDF_PRINTMODE_POSTSCRIPT3_TYPE42 to output level 3
+//                 PostScript with embedded Type 42 fonts, when applicable, into
+//                 EMF as a series of GDI comments.
+//                 FPDF_PRINTMODE_POSTSCRIPT3_TYPE42_PASSTHROUGH to output level
+//                 3 PostScript with embedded Type 42 fonts, when applicable,
+//                 via ExtEscape() in PASSTHROUGH mode.
 // Return value:
 //          True if successful, false if unsuccessful (typically invalid input).
 FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV FPDF_SetPrintMode(int mode);
@@ -343,6 +364,8 @@ FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV FPDF_SetPrintMode(int mode);
 //          Loaded document can be closed by FPDF_CloseDocument().
 //          If this function fails, you can use FPDF_GetLastError() to retrieve
 //          the reason why it failed.
+//
+//          The encoding for |file_path| is UTF-8.
 //
 //          The encoding for |password| can be either UTF-8 or Latin-1. PDFs,
 //          depending on the security handler revision, will only accept one or
@@ -375,6 +398,33 @@ FPDF_LoadDocument(FPDF_STRING file_path, FPDF_BYTESTRING password);
 //          fields defined in the fpdfformfill.h file.
 FPDF_EXPORT FPDF_DOCUMENT FPDF_CALLCONV
 FPDF_LoadMemDocument(const void* data_buf, int size, FPDF_BYTESTRING password);
+
+// Experimental API.
+// Function: FPDF_LoadMemDocument64
+//          Open and load a PDF document from memory.
+// Parameters:
+//          data_buf    -   Pointer to a buffer containing the PDF document.
+//          size        -   Number of bytes in the PDF document.
+//          password    -   A string used as the password for the PDF file.
+//                          If no password is needed, empty or NULL can be used.
+// Return value:
+//          A handle to the loaded document, or NULL on failure.
+// Comments:
+//          The memory buffer must remain valid when the document is open.
+//          The loaded document can be closed by FPDF_CloseDocument.
+//          If this function fails, you can use FPDF_GetLastError() to retrieve
+//          the reason why it failed.
+//
+//          See the comments for FPDF_LoadDocument() regarding the encoding for
+//          |password|.
+// Notes:
+//          If PDFium is built with the XFA module, the application should call
+//          FPDF_LoadXFA() function after the PDF document loaded to support XFA
+//          fields defined in the fpdfformfill.h file.
+FPDF_EXPORT FPDF_DOCUMENT FPDF_CALLCONV
+FPDF_LoadMemDocument64(const void* data_buf,
+                       size_t size,
+                       FPDF_BYTESTRING password);
 
 // Structure for custom file access.
 typedef struct {
@@ -551,12 +601,13 @@ FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV FPDF_GetFileVersion(FPDF_DOCUMENT doc,
 //          A 32-bit integer indicating error code as defined above.
 // Comments:
 //          If the previous SDK call succeeded, the return value of this
-//          function is not defined.
+//          function is not defined. This function only works in conjunction
+//          with APIs that mention FPDF_GetLastError() in their documentation.
 FPDF_EXPORT unsigned long FPDF_CALLCONV FPDF_GetLastError();
 
+// Experimental API.
 // Function: FPDF_DocumentHasValidCrossReferenceTable
 //          Whether the document's cross reference table is valid or not.
-//          Experimental API.
 // Parameters:
 //          document    -   Handle to a document. Returned by FPDF_LoadDocument.
 // Return value:
@@ -568,6 +619,25 @@ FPDF_EXPORT unsigned long FPDF_CALLCONV FPDF_GetLastError();
 //          The return value can change over time as the PDF parser evolves.
 FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV
 FPDF_DocumentHasValidCrossReferenceTable(FPDF_DOCUMENT document);
+
+// Experimental API.
+// Function: FPDF_GetTrailerEnds
+//          Get the byte offsets of trailer ends.
+// Parameters:
+//          document    -   Handle to document. Returned by FPDF_LoadDocument().
+//          buffer      -   The address of a buffer that receives the
+//                          byte offsets.
+//          length      -   The size, in ints, of |buffer|.
+// Return value:
+//          Returns the number of ints in the buffer on success, 0 on error.
+//
+// |buffer| is an array of integers that describes the exact byte offsets of the
+// trailer ends in the document. If |length| is less than the returned length,
+// or |document| or |buffer| is NULL, |buffer| will not be modified.
+FPDF_EXPORT unsigned long FPDF_CALLCONV
+FPDF_GetTrailerEnds(FPDF_DOCUMENT document,
+                    unsigned int* buffer,
+                    unsigned long length);
 
 // Function: FPDF_GetDocPermission
 //          Get file permission flags of the document.
@@ -707,7 +777,8 @@ FPDF_EXPORT int FPDF_CALLCONV FPDF_GetPageSizeByIndex(FPDF_DOCUMENT document,
 //
 // Set if annotations are to be rendered.
 #define FPDF_ANNOT 0x01
-// Set if using text rendering optimized for LCD display.
+// Set if using text rendering optimized for LCD display. This flag will only
+// take effect if anti-aliasing is enabled for text.
 #define FPDF_LCD_TEXT 0x02
 // Don't use the native text output available on some platforms
 #define FPDF_NO_NATIVETEXT 0x04
@@ -723,7 +794,8 @@ FPDF_EXPORT int FPDF_CALLCONV FPDF_GetPageSizeByIndex(FPDF_DOCUMENT document,
 #define FPDF_RENDER_FORCEHALFTONE 0x400
 // Render for printing.
 #define FPDF_PRINTING 0x800
-// Set to disable anti-aliasing on text.
+// Set to disable anti-aliasing on text. This flag will also disable LCD
+// optimization for text rendering.
 #define FPDF_RENDER_NO_SMOOTHTEXT 0x1000
 // Set to disable anti-aliasing on images.
 #define FPDF_RENDER_NO_SMOOTHIMAGE 0x2000
@@ -732,6 +804,19 @@ FPDF_EXPORT int FPDF_CALLCONV FPDF_GetPageSizeByIndex(FPDF_DOCUMENT document,
 // Set whether to render in a reverse Byte order, this flag is only used when
 // rendering to a bitmap.
 #define FPDF_REVERSE_BYTE_ORDER 0x10
+// Set whether fill paths need to be stroked. This flag is only used when
+// FPDF_COLORSCHEME is passed in, since with a single fill color for paths the
+// boundaries of adjacent fill paths are less visible.
+#define FPDF_CONVERT_FILL_TO_STROKE 0x20
+
+// Struct for color scheme.
+// Each should be a 32-bit value specifying the color, in 8888 ARGB format.
+typedef struct FPDF_COLORSCHEME_ {
+  FPDF_DWORD path_fill_color;
+  FPDF_DWORD path_stroke_color;
+  FPDF_DWORD text_fill_color;
+  FPDF_DWORD text_stroke_color;
+} FPDF_COLORSCHEME;
 
 #ifdef _WIN32
 // Function: FPDF_RenderPage
@@ -825,7 +910,17 @@ FPDF_RenderPageBitmapWithMatrix(FPDF_BITMAP bitmap,
                                 const FS_RECTF* clipping,
                                 int flags);
 
-#ifdef _SKIA_SUPPORT_
+#if defined(_SKIA_SUPPORT_)
+// Experimental API.
+// Function: FPDF_RenderPageSkp
+//          Render contents of a page to a Skia SkPictureRecorder.
+// Parameters:
+//          page        -   Handle to the page.
+//          size_x      -   Horizontal size (in pixels) for displaying the page.
+//          size_y      -   Vertical size (in pixels) for displaying the page.
+// Return value:
+//          The SkPictureRecorder that holds the rendering of the page, or NULL
+//          on failure. Caller takes ownership of the returned result.
 FPDF_EXPORT FPDF_RECORDER FPDF_CALLCONV FPDF_RenderPageSkp(FPDF_PAGE page,
                                                            int size_x,
                                                            int size_y);
@@ -993,9 +1088,15 @@ FPDF_EXPORT FPDF_BITMAP FPDF_CALLCONV FPDFBitmap_Create(int width,
 //                          above.
 //          first_scan  -   A pointer to the first byte of the first line if
 //                          using an external buffer. If this parameter is NULL,
-//                          then the a new buffer will be created.
-//          stride      -   Number of bytes for each scan line, for external
-//                          buffer only.
+//                          then a new buffer will be created.
+//          stride      -   Number of bytes for each scan line. The value must
+//                          be 0 or greater. When the value is 0,
+//                          FPDFBitmap_CreateEx() will automatically calculate
+//                          the appropriate value using |width| and |format|.
+//                          When using an external buffer, it is recommended for
+//                          the caller to pass in the value.
+//                          When not using an external buffer, it is recommended
+//                          for the caller to pass in 0.
 // Return value:
 //          The bitmap handle, or NULL if parameter error or out of memory.
 // Comments:
@@ -1004,9 +1105,11 @@ FPDF_EXPORT FPDF_BITMAP FPDF_CALLCONV FPDFBitmap_Create(int width,
 //          function can be used in any place that a FPDF_BITMAP handle is
 //          required.
 //
-//          If an external buffer is used, then the application should destroy
-//          the buffer by itself. FPDFBitmap_Destroy function will not destroy
-//          the buffer.
+//          If an external buffer is used, then the caller should destroy the
+//          buffer. FPDFBitmap_Destroy() will not destroy the buffer.
+//
+//          It is recommended to use FPDFBitmap_GetStride() to get the stride
+//          value.
 FPDF_EXPORT FPDF_BITMAP FPDF_CALLCONV FPDFBitmap_CreateEx(int width,
                                                           int height,
                                                           int format,
@@ -1070,8 +1173,7 @@ FPDF_EXPORT void FPDF_CALLCONV FPDFBitmap_FillRect(FPDF_BITMAP bitmap,
 //          then manipulate any color and/or alpha values for any pixels in the
 //          bitmap.
 //
-//          The data is in BGRA format. Where the A maybe unused if alpha was
-//          not specified.
+//          Use FPDFBitmap_GetFormat() to find out the format of the data.
 FPDF_EXPORT void* FPDF_CALLCONV FPDFBitmap_GetBuffer(FPDF_BITMAP bitmap);
 
 // Function: FPDFBitmap_GetWidth
@@ -1142,9 +1244,9 @@ FPDF_VIEWERREF_GetNumCopies(FPDF_DOCUMENT document);
 FPDF_EXPORT FPDF_PAGERANGE FPDF_CALLCONV
 FPDF_VIEWERREF_GetPrintPageRange(FPDF_DOCUMENT document);
 
+// Experimental API.
 // Function: FPDF_VIEWERREF_GetPrintPageRangeCount
 //          Returns the number of elements in a FPDF_PAGERANGE.
-//          Experimental API.
 // Parameters:
 //          pagerange   -   Handle to the page range.
 // Return value:
@@ -1152,9 +1254,9 @@ FPDF_VIEWERREF_GetPrintPageRange(FPDF_DOCUMENT document);
 FPDF_EXPORT size_t FPDF_CALLCONV
 FPDF_VIEWERREF_GetPrintPageRangeCount(FPDF_PAGERANGE pagerange);
 
+// Experimental API.
 // Function: FPDF_VIEWERREF_GetPrintPageRangeElement
 //          Returns an element from a FPDF_PAGERANGE.
-//          Experimental API.
 // Parameters:
 //          pagerange   -   Handle to the page range.
 //          index       -   Index of the element.
@@ -1240,6 +1342,65 @@ FPDF_EXPORT FPDF_DEST FPDF_CALLCONV FPDF_GetNamedDest(FPDF_DOCUMENT document,
                                                       void* buffer,
                                                       long* buflen);
 
+// Experimental API.
+// Function: FPDF_GetXFAPacketCount
+//          Get the number of valid packets in the XFA entry.
+// Parameters:
+//          document - Handle to the document.
+// Return value:
+//          The number of valid packets, or -1 on error.
+FPDF_EXPORT int FPDF_CALLCONV FPDF_GetXFAPacketCount(FPDF_DOCUMENT document);
+
+// Experimental API.
+// Function: FPDF_GetXFAPacketName
+//          Get the name of a packet in the XFA array.
+// Parameters:
+//          document - Handle to the document.
+//          index    - Index number of the packet. 0 for the first packet.
+//          buffer   - Buffer for holding the name of the XFA packet.
+//          buflen   - Length of |buffer| in bytes.
+// Return value:
+//          The length of the packet name in bytes, or 0 on error.
+//
+// |document| must be valid and |index| must be in the range [0, N), where N is
+// the value returned by FPDF_GetXFAPacketCount().
+// |buffer| is only modified if it is non-NULL and |buflen| is greater than or
+// equal to the length of the packet name. The packet name includes a
+// terminating NUL character. |buffer| is unmodified on error.
+FPDF_EXPORT unsigned long FPDF_CALLCONV FPDF_GetXFAPacketName(
+    FPDF_DOCUMENT document,
+    int index,
+    void* buffer,
+    unsigned long buflen);
+
+// Experimental API.
+// Function: FPDF_GetXFAPacketContent
+//          Get the content of a packet in the XFA array.
+// Parameters:
+//          document   - Handle to the document.
+//          index      - Index number of the packet. 0 for the first packet.
+//          buffer     - Buffer for holding the content of the XFA packet.
+//          buflen     - Length of |buffer| in bytes.
+//          out_buflen - Pointer to the variable that will receive the minimum
+//                       buffer size needed to contain the content of the XFA
+//                       packet.
+// Return value:
+//          Whether the operation succeeded or not.
+//
+// |document| must be valid and |index| must be in the range [0, N), where N is
+// the value returned by FPDF_GetXFAPacketCount(). |out_buflen| must not be
+// NULL. When the aforementioned arguments are valid, the operation succeeds,
+// and |out_buflen| receives the content size. |buffer| is only modified if
+// |buffer| is non-null and long enough to contain the content. Callers must
+// check both the return value and the input |buflen| is no less than the
+// returned |out_buflen| before using the data in |buffer|.
+FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV FPDF_GetXFAPacketContent(
+    FPDF_DOCUMENT document,
+    int index,
+    void* buffer,
+    unsigned long buflen,
+    unsigned long* out_buflen);
+
 #ifdef PDF_ENABLE_V8
 // Function: FPDF_GetRecommendedV8Flags
 //          Returns a space-separated string of command line flags that are
@@ -1251,6 +1412,21 @@ FPDF_EXPORT FPDF_DEST FPDF_CALLCONV FPDF_GetNamedDest(FPDF_DOCUMENT document,
 //          NUL-terminated string of the form "--flag1 --flag2".
 //          The caller must not attempt to modify or free the result.
 FPDF_EXPORT const char* FPDF_CALLCONV FPDF_GetRecommendedV8Flags();
+
+// Experimental API.
+// Function: FPDF_GetArrayBufferAllocatorSharedInstance()
+//          Helper function for initializing V8 isolates that will
+//          use PDFium's internal memory management.
+// Parameters:
+//          None.
+// Return Value:
+//          Pointer to a suitable v8::ArrayBuffer::Allocator, returned
+//          as void for C compatibility.
+// Notes:
+//          Use is optional, but allows external creation of isolates
+//          matching the ones PDFium will make when none is provided
+//          via |FPDF_LIBRARY_CONFIG::m_pIsolate|.
+FPDF_EXPORT void* FPDF_CALLCONV FPDF_GetArrayBufferAllocatorSharedInstance();
 #endif  // PDF_ENABLE_V8
 
 #ifdef PDF_ENABLE_XFA

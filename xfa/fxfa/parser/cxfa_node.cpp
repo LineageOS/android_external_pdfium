@@ -1,10 +1,13 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // Original code copyright 2014 Foxit Software Inc. http://www.foxitsoftware.com
 
 #include "xfa/fxfa/parser/cxfa_node.h"
+
+#include <math.h>
+#include <stdint.h>
 
 #include <algorithm>
 #include <map>
@@ -14,23 +17,27 @@
 #include <vector>
 
 #include "core/fxcrt/autorestorer.h"
-#include "core/fxcrt/cfx_readonlymemorystream.h"
+#include "core/fxcrt/cfx_read_only_string_stream.h"
+#include "core/fxcrt/cfx_read_only_vector_stream.h"
+#include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_extension.h"
+#include "core/fxcrt/stl_util.h"
 #include "core/fxcrt/xml/cfx_xmldocument.h"
 #include "core/fxcrt/xml/cfx_xmlelement.h"
 #include "core/fxcrt/xml/cfx_xmlnode.h"
 #include "core/fxcrt/xml/cfx_xmltext.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
 #include "core/fxge/fx_font.h"
+#include "fxjs/gc/container_trace.h"
 #include "fxjs/xfa/cfxjse_engine.h"
 #include "fxjs/xfa/cfxjse_value.h"
 #include "fxjs/xfa/cjx_node.h"
-#include "third_party/base/compiler_specific.h"
-#include "third_party/base/logging.h"
-#include "third_party/base/ptr_util.h"
+#include "third_party/base/check.h"
+#include "third_party/base/check_op.h"
+#include "third_party/base/containers/contains.h"
+#include "third_party/base/notreached.h"
 #include "third_party/base/span.h"
-#include "third_party/base/stl_util.h"
 #include "xfa/fde/cfde_textout.h"
 #include "xfa/fgas/crt/cfgas_decimal.h"
 #include "xfa/fgas/crt/locale_iface.h"
@@ -123,13 +130,12 @@
 #include "xfa/fxfa/parser/cxfa_defaultui.h"
 #include "xfa/fxfa/parser/cxfa_delete.h"
 #include "xfa/fxfa/parser/cxfa_delta.h"
-#include "xfa/fxfa/parser/cxfa_deltas.h"
 #include "xfa/fxfa/parser/cxfa_desc.h"
 #include "xfa/fxfa/parser/cxfa_destination.h"
 #include "xfa/fxfa/parser/cxfa_digestmethod.h"
 #include "xfa/fxfa/parser/cxfa_digestmethods.h"
 #include "xfa/fxfa/parser/cxfa_document.h"
-#include "xfa/fxfa/parser/cxfa_document_parser.h"
+#include "xfa/fxfa/parser/cxfa_document_builder.h"
 #include "xfa/fxfa/parser/cxfa_documentassembly.h"
 #include "xfa/fxfa/parser/cxfa_draw.h"
 #include "xfa/fxfa/parser/cxfa_driver.h"
@@ -369,7 +375,7 @@ namespace {
 
 constexpr uint8_t kMaxExecuteRecursion = 2;
 
-constexpr uint8_t g_inv_base64[128] = {
+constexpr uint8_t kInvBase64[128] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 62,  255,
@@ -382,12 +388,12 @@ constexpr uint8_t g_inv_base64[128] = {
 };
 
 inline uint8_t GetInvBase64(uint8_t x) {
-  return (x & 128) == 0 ? g_inv_base64[x] : 255;
+  return (x & 128) == 0 ? kInvBase64[x] : 255;
 }
 
-std::vector<uint8_t> XFA_RemoveBase64Whitespace(
+DataVector<uint8_t> XFA_RemoveBase64Whitespace(
     pdfium::span<const uint8_t> spStr) {
-  std::vector<uint8_t> result;
+  DataVector<uint8_t> result;
   result.reserve(spStr.size());
   for (uint8_t ch : spStr) {
     if (GetInvBase64(ch) != 255 || ch == '=')
@@ -396,12 +402,12 @@ std::vector<uint8_t> XFA_RemoveBase64Whitespace(
   return result;
 }
 
-std::vector<uint8_t> XFA_Base64Decode(const ByteString& bsStr) {
-  std::vector<uint8_t> result;
+DataVector<uint8_t> XFA_Base64Decode(const ByteString& bsStr) {
+  DataVector<uint8_t> result;
   if (bsStr.IsEmpty())
     return result;
 
-  std::vector<uint8_t> buffer = XFA_RemoveBase64Whitespace(bsStr.raw_span());
+  DataVector<uint8_t> buffer = XFA_RemoveBase64Whitespace(bsStr.raw_span());
   result.reserve(3 * (buffer.size() / 4));
 
   uint32_t dwLimb = 0;
@@ -412,21 +418,21 @@ std::vector<uint8_t> XFA_Base64Decode(const ByteString& bsStr) {
         break;
       }
       if (buffer[i + 2] == '=') {
-        dwLimb = ((uint32_t)g_inv_base64[buffer[i]] << 6) |
-                 ((uint32_t)g_inv_base64[buffer[i + 1]]);
+        dwLimb = ((uint32_t)kInvBase64[buffer[i]] << 6) |
+                 ((uint32_t)kInvBase64[buffer[i + 1]]);
         result.push_back((uint8_t)(dwLimb >> 4) & 0xFF);
       } else {
-        dwLimb = ((uint32_t)g_inv_base64[buffer[i]] << 12) |
-                 ((uint32_t)g_inv_base64[buffer[i + 1]] << 6) |
-                 ((uint32_t)g_inv_base64[buffer[i + 2]]);
+        dwLimb = ((uint32_t)kInvBase64[buffer[i]] << 12) |
+                 ((uint32_t)kInvBase64[buffer[i + 1]] << 6) |
+                 ((uint32_t)kInvBase64[buffer[i + 2]]);
         result.push_back((uint8_t)(dwLimb >> 10) & 0xFF);
         result.push_back((uint8_t)(dwLimb >> 2) & 0xFF);
       }
     } else {
-      dwLimb = ((uint32_t)g_inv_base64[buffer[i]] << 18) |
-               ((uint32_t)g_inv_base64[buffer[i + 1]] << 12) |
-               ((uint32_t)g_inv_base64[buffer[i + 2]] << 6) |
-               ((uint32_t)g_inv_base64[buffer[i + 3]]);
+      dwLimb = ((uint32_t)kInvBase64[buffer[i]] << 18) |
+               ((uint32_t)kInvBase64[buffer[i + 1]] << 12) |
+               ((uint32_t)kInvBase64[buffer[i + 2]] << 6) |
+               ((uint32_t)kInvBase64[buffer[i + 3]]);
       result.push_back((uint8_t)(dwLimb >> 16) & 0xff);
       result.push_back((uint8_t)(dwLimb >> 8) & 0xff);
       result.push_back((uint8_t)(dwLimb)&0xff);
@@ -474,20 +480,19 @@ RetainPtr<CFX_DIBitmap> XFA_LoadImageData(CXFA_FFDoc* pDoc,
     return nullptr;
 
   FXCODEC_IMAGE_TYPE type = XFA_GetImageType(pImage->GetContentType());
-  ByteString bsData;  // Must outlive |pImageFileRead|.
-  std::vector<uint8_t> buffer;  // Must outlive |pImageFileRead|.
+
   RetainPtr<IFX_SeekableReadStream> pImageFileRead;
   if (wsImage.GetLength() > 0) {
     XFA_AttributeValue iEncoding = pImage->GetTransferEncoding();
     if (iEncoding == XFA_AttributeValue::Base64) {
-      bsData = wsImage.ToUTF8();
-      buffer = XFA_Base64Decode(bsData);
-      if (!buffer.empty())
-        pImageFileRead = pdfium::MakeRetain<CFX_ReadOnlyMemoryStream>(buffer);
+      DataVector<uint8_t> buffer = XFA_Base64Decode(wsImage.ToUTF8());
+      if (!buffer.empty()) {
+        pImageFileRead =
+            pdfium::MakeRetain<CFX_ReadOnlyVectorStream>(std::move(buffer));
+      }
     } else {
-      bsData = wsImage.ToDefANSI();
       pImageFileRead =
-          pdfium::MakeRetain<CFX_ReadOnlyMemoryStream>(bsData.raw_span());
+          pdfium::MakeRetain<CFX_ReadOnlyStringStream>(wsImage.ToDefANSI());
     }
   } else {
     WideString wsURL = wsHref;
@@ -500,15 +505,14 @@ RetainPtr<CFX_DIBitmap> XFA_LoadImageData(CXFA_FFDoc* pDoc,
         return pBitmap;
       }
     }
-    pImageFileRead = pDoc->GetDocEnvironment()->OpenLinkedFile(pDoc, wsURL);
+    pImageFileRead = pDoc->OpenLinkedFile(wsURL);
   }
   if (!pImageFileRead)
     return nullptr;
 
   bNameImage = false;
-  RetainPtr<CFX_DIBitmap> pBitmap =
-      XFA_LoadImageFromBuffer(pImageFileRead, type, iImageXDpi, iImageYDpi);
-  return pBitmap;
+  return XFA_LoadImageFromBuffer(std::move(pImageFileRead), type, iImageXDpi,
+                                 iImageYDpi);
 }
 
 bool SplitDateTime(const WideString& wsDateTime,
@@ -542,75 +546,62 @@ bool SplitDateTime(const WideString& wsDateTime,
   return true;
 }
 
-std::vector<CXFA_Node*> NodesSortedByDocumentIdx(
-    const std::set<CXFA_Node*>& rgNodeSet) {
-  if (rgNodeSet.empty())
-    return std::vector<CXFA_Node*>();
+// Stack allocated. Using containers of members would be correct here
+// if advanced GC worked with STL.
+using NodeSet = std::set<cppgc::Member<CXFA_Node>>;
+using NodeSetPair = std::pair<NodeSet, NodeSet>;
+using NodeSetPairMap = std::map<uint32_t, NodeSetPair>;
+using NodeSetPairMapMap = std::map<CXFA_Node*, NodeSetPairMap>;
+using NodeVector = std::vector<cppgc::Member<CXFA_Node>>;
 
-  std::vector<CXFA_Node*> rgNodeArray;
+NodeVector NodesSortedByDocumentIdx(const NodeSet& rgNodeSet) {
+  if (rgNodeSet.empty())
+    return NodeVector();
+
+  NodeVector rgNodeArray;
   CXFA_Node* pCommonParent = (*rgNodeSet.begin())->GetParent();
   for (CXFA_Node* pNode = pCommonParent->GetFirstChild(); pNode;
        pNode = pNode->GetNextSibling()) {
-    if (pdfium::ContainsValue(rgNodeSet, pNode))
+    if (pdfium::Contains(rgNodeSet, pNode))
       rgNodeArray.push_back(pNode);
   }
   return rgNodeArray;
 }
 
-using CXFA_NodeSetPair = std::pair<std::set<CXFA_Node*>, std::set<CXFA_Node*>>;
-using CXFA_NodeSetPairMap =
-    std::map<uint32_t, std::unique_ptr<CXFA_NodeSetPair>>;
-using CXFA_NodeSetPairMapMap =
-    std::map<CXFA_Node*, std::unique_ptr<CXFA_NodeSetPairMap>>;
-
-CXFA_NodeSetPair* NodeSetPairForNode(CXFA_Node* pNode,
-                                     CXFA_NodeSetPairMapMap* pMap) {
+NodeSetPair* NodeSetPairForNode(CXFA_Node* pNode, NodeSetPairMapMap* pMap) {
   CXFA_Node* pParentNode = pNode->GetParent();
   uint32_t dwNameHash = pNode->GetNameHash();
   if (!pParentNode || !dwNameHash)
     return nullptr;
 
-  if (!(*pMap)[pParentNode])
-    (*pMap)[pParentNode] = pdfium::MakeUnique<CXFA_NodeSetPairMap>();
-
-  CXFA_NodeSetPairMap* pNodeSetPairMap = (*pMap)[pParentNode].get();
-  if (!(*pNodeSetPairMap)[dwNameHash])
-    (*pNodeSetPairMap)[dwNameHash] = pdfium::MakeUnique<CXFA_NodeSetPair>();
-
-  return (*pNodeSetPairMap)[dwNameHash].get();
+  return &((*pMap)[pParentNode][dwNameHash]);
 }
 
-void ReorderDataNodes(const std::set<CXFA_Node*>& sSet1,
-                      const std::set<CXFA_Node*>& sSet2,
+void ReorderDataNodes(const NodeSet& sSet1,
+                      const NodeSet& sSet2,
                       bool bInsertBefore) {
-  CXFA_NodeSetPairMapMap rgMap;
+  NodeSetPairMapMap rgMap;
   for (CXFA_Node* pNode : sSet1) {
-    CXFA_NodeSetPair* pNodeSetPair = NodeSetPairForNode(pNode, &rgMap);
+    NodeSetPair* pNodeSetPair = NodeSetPairForNode(pNode, &rgMap);
     if (pNodeSetPair)
       pNodeSetPair->first.insert(pNode);
   }
   for (CXFA_Node* pNode : sSet2) {
-    CXFA_NodeSetPair* pNodeSetPair = NodeSetPairForNode(pNode, &rgMap);
+    NodeSetPair* pNodeSetPair = NodeSetPairForNode(pNode, &rgMap);
     if (pNodeSetPair) {
-      if (pdfium::ContainsValue(pNodeSetPair->first, pNode))
+      if (pdfium::Contains(pNodeSetPair->first, pNode))
         pNodeSetPair->first.erase(pNode);
       else
         pNodeSetPair->second.insert(pNode);
     }
   }
-  for (const auto& iter1 : rgMap) {
-    CXFA_NodeSetPairMap* pNodeSetPairMap = iter1.second.get();
-    if (!pNodeSetPairMap)
-      continue;
-
-    for (const auto& iter2 : *pNodeSetPairMap) {
-      CXFA_NodeSetPair* pNodeSetPair = iter2.second.get();
-      if (!pNodeSetPair)
-        continue;
+  for (auto& iter1 : rgMap) {
+    NodeSetPairMap* pNodeSetPairMap = &iter1.second;
+    for (auto& iter2 : *pNodeSetPairMap) {
+      NodeSetPair* pNodeSetPair = &iter2.second;
       if (!pNodeSetPair->first.empty() && !pNodeSetPair->second.empty()) {
-        std::vector<CXFA_Node*> rgNodeArray1 =
-            NodesSortedByDocumentIdx(pNodeSetPair->first);
-        std::vector<CXFA_Node*> rgNodeArray2 =
+        NodeVector rgNodeArray1 = NodesSortedByDocumentIdx(pNodeSetPair->first);
+        NodeVector rgNodeArray2 =
             NodesSortedByDocumentIdx(pNodeSetPair->second);
         CXFA_Node* pParentNode = nullptr;
         CXFA_Node* pBeforeNode = nullptr;
@@ -622,7 +613,7 @@ void ReorderDataNodes(const std::set<CXFA_Node*>& sSet1,
           pParentNode = pLastNode->GetParent();
           pBeforeNode = pLastNode->GetNextSibling();
         }
-        for (auto* pCurNode : rgNodeArray1) {
+        for (auto& pCurNode : rgNodeArray1) {
           pParentNode->RemoveChildAndNotify(pCurNode, true);
           pParentNode->InsertChildAndNotify(pCurNode, pBeforeNode);
         }
@@ -658,23 +649,21 @@ WideString FormatNumStr(const WideString& wsValue, LocaleIface* pLocale) {
     wsSrcNum.Delete(0, 1);
   }
 
-  auto dot_index = wsSrcNum.Find('.');
-  dot_index = !dot_index.has_value() ? wsSrcNum.GetLength() : dot_index;
-
-  if (dot_index.value() < 1)
+  size_t dot_index = wsSrcNum.Find('.').value_or(wsSrcNum.GetLength());
+  if (dot_index == 0)
     return WideString();
 
-  size_t nPos = dot_index.value() % 3;
+  size_t nPos = dot_index % 3;
   WideString wsOutput;
-  for (size_t i = 0; i < dot_index.value(); i++) {
+  for (size_t i = 0; i < dot_index; i++) {
     if (i % 3 == nPos && i != 0)
       wsOutput += wsGroupSymbol;
 
     wsOutput += wsSrcNum[i];
   }
-  if (dot_index.value() < wsSrcNum.GetLength()) {
+  if (dot_index < wsSrcNum.GetLength()) {
     wsOutput += pLocale->GetDecimalSymbol();
-    wsOutput += wsSrcNum.Last(wsSrcNum.GetLength() - dot_index.value() - 1);
+    wsOutput += wsSrcNum.Last(wsSrcNum.GetLength() - dot_index - 1);
   }
   if (bNeg)
     return pLocale->GetMinusSymbol() + wsOutput;
@@ -684,24 +673,24 @@ WideString FormatNumStr(const WideString& wsValue, LocaleIface* pLocale) {
 
 CXFA_Node* FindFirstSiblingNamedInList(CXFA_Node* parent,
                                        uint32_t dwNameHash,
-                                       uint32_t dwFilter);
+                                       Mask<XFA_NodeFilter> dwFilter);
 CXFA_Node* FindFirstSiblingOfClassInList(CXFA_Node* parent,
                                          XFA_Element element,
-                                         uint32_t dwFilter);
+                                         Mask<XFA_NodeFilter> dwFilter);
 
 CXFA_Node* FindFirstSiblingNamed(CXFA_Node* parent, uint32_t dwNameHash) {
   CXFA_Node* result = FindFirstSiblingNamedInList(parent, dwNameHash,
-                                                  XFA_NODEFILTER_Properties);
+                                                  XFA_NodeFilter::kProperties);
   if (result)
     return result;
 
   return FindFirstSiblingNamedInList(parent, dwNameHash,
-                                     XFA_NODEFILTER_Children);
+                                     XFA_NodeFilter::kChildren);
 }
 
 CXFA_Node* FindFirstSiblingNamedInList(CXFA_Node* parent,
                                        uint32_t dwNameHash,
-                                       uint32_t dwFilter) {
+                                       Mask<XFA_NodeFilter> dwFilter) {
   for (CXFA_Node* child : parent->GetNodeListWithFilter(dwFilter)) {
     if (child->GetNameHash() == dwNameHash)
       return child;
@@ -714,18 +703,18 @@ CXFA_Node* FindFirstSiblingNamedInList(CXFA_Node* parent,
 }
 
 CXFA_Node* FindFirstSiblingOfClass(CXFA_Node* parent, XFA_Element element) {
-  CXFA_Node* result =
-      FindFirstSiblingOfClassInList(parent, element, XFA_NODEFILTER_Properties);
+  CXFA_Node* result = FindFirstSiblingOfClassInList(
+      parent, element, XFA_NodeFilter::kProperties);
   if (result)
     return result;
 
   return FindFirstSiblingOfClassInList(parent, element,
-                                       XFA_NODEFILTER_Children);
+                                       XFA_NodeFilter::kChildren);
 }
 
 CXFA_Node* FindFirstSiblingOfClassInList(CXFA_Node* parent,
                                          XFA_Element element,
-                                         uint32_t dwFilter) {
+                                         Mask<XFA_NodeFilter> dwFilter) {
   for (CXFA_Node* child : parent->GetNodeListWithFilter(dwFilter)) {
     if (child->GetElementType() == element)
       return child;
@@ -760,36 +749,11 @@ WideString GetNameExpressionSinglePath(CXFA_Node* pNode) {
 void TraverseSiblings(CXFA_Node* parent,
                       uint32_t dwNameHash,
                       std::vector<CXFA_Node*>* pSiblings,
-                      bool bIsClassName,
-                      bool bIsFindProperty) {
-  ASSERT(parent);
-  ASSERT(pSiblings);
-
-  if (bIsFindProperty) {
-    for (CXFA_Node* child :
-         parent->GetNodeListWithFilter(XFA_NODEFILTER_Properties)) {
-      if (bIsClassName) {
-        if (child->GetClassHashCode() == dwNameHash)
-          pSiblings->push_back(child);
-      } else {
-        if (child->GetNameHash() == dwNameHash) {
-          if (child->GetElementType() != XFA_Element::PageSet &&
-              child->GetElementType() != XFA_Element::Extras &&
-              child->GetElementType() != XFA_Element::Items) {
-            pSiblings->push_back(child);
-          }
-        }
-      }
-      if (child->IsUnnamed() &&
-          child->GetElementType() == XFA_Element::PageSet) {
-        TraverseSiblings(child, dwNameHash, pSiblings, bIsClassName, false);
-      }
-    }
-    if (!pSiblings->empty())
-      return;
-  }
+                      bool bIsClassName) {
+  DCHECK(parent);
+  DCHECK(pSiblings);
   for (CXFA_Node* child :
-       parent->GetNodeListWithFilter(XFA_NODEFILTER_Children)) {
+       parent->GetNodeListWithFilter(XFA_NodeFilter::kChildren)) {
     if (child->GetElementType() == XFA_Element::Variables)
       continue;
 
@@ -800,56 +764,102 @@ void TraverseSiblings(CXFA_Node* parent,
       if (child->GetNameHash() == dwNameHash)
         pSiblings->push_back(child);
     }
-
     if (child->IsTransparent() &&
         child->GetElementType() != XFA_Element::PageSet) {
-      TraverseSiblings(child, dwNameHash, pSiblings, bIsClassName, false);
+      TraverseSiblings(child, dwNameHash, pSiblings, bIsClassName);
     }
   }
 }
 
+void TraversePropertiesOrSiblings(CXFA_Node* parent,
+                                  uint32_t dwNameHash,
+                                  std::vector<CXFA_Node*>* pSiblings,
+                                  bool bIsClassName) {
+  DCHECK(parent);
+  DCHECK(pSiblings);
+  for (CXFA_Node* child :
+       parent->GetNodeListWithFilter(XFA_NodeFilter::kProperties)) {
+    if (bIsClassName) {
+      if (child->GetClassHashCode() == dwNameHash)
+        pSiblings->push_back(child);
+    } else {
+      if (child->GetNameHash() == dwNameHash) {
+        if (child->GetElementType() != XFA_Element::PageSet &&
+            child->GetElementType() != XFA_Element::Extras &&
+            child->GetElementType() != XFA_Element::Items) {
+          pSiblings->push_back(child);
+        }
+      }
+    }
+    if (child->IsUnnamed() && child->GetElementType() == XFA_Element::PageSet) {
+      TraverseSiblings(child, dwNameHash, pSiblings, bIsClassName);
+    }
+  }
+  if (pSiblings->empty())
+    TraverseSiblings(parent, dwNameHash, pSiblings, bIsClassName);
+}
+
 }  // namespace
 
-class CXFA_WidgetLayoutData {
+class CXFA_WidgetLayoutData
+    : public cppgc::GarbageCollected<CXFA_WidgetLayoutData> {
  public:
-  CXFA_WidgetLayoutData() = default;
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   virtual ~CXFA_WidgetLayoutData() = default;
+
+  virtual void Trace(cppgc::Visitor* visitor) const {}
 
   virtual CXFA_FieldLayoutData* AsFieldLayoutData() { return nullptr; }
   virtual CXFA_ImageLayoutData* AsImageLayoutData() { return nullptr; }
   virtual CXFA_TextLayoutData* AsTextLayoutData() { return nullptr; }
 
+  float GetWidgetHeight() const { return m_fWidgetHeight; }
+  void SetWidgetHeight(float height) { m_fWidgetHeight = height; }
+
+ protected:
+  CXFA_WidgetLayoutData() = default;
+
+ private:
   float m_fWidgetHeight = -1.0f;
 };
 
 class CXFA_TextLayoutData final : public CXFA_WidgetLayoutData {
  public:
-  CXFA_TextLayoutData() = default;
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_TextLayoutData() override = default;
+
+  void Trace(cppgc::Visitor* visitor) const override {
+    CXFA_WidgetLayoutData::Trace(visitor);
+    visitor->Trace(m_pTextLayout);
+    visitor->Trace(m_pTextProvider);
+  }
 
   CXFA_TextLayoutData* AsTextLayoutData() override { return this; }
 
-  CXFA_TextLayout* GetTextLayout() const { return m_pTextLayout.get(); }
-  CXFA_TextProvider* GetTextProvider() const { return m_pTextProvider.get(); }
+  CXFA_TextLayout* GetTextLayout() const { return m_pTextLayout; }
+  CXFA_TextProvider* GetTextProvider() const { return m_pTextProvider; }
 
   void LoadText(CXFA_FFDoc* doc, CXFA_Node* pNode) {
     if (m_pTextLayout)
       return;
 
-    m_pTextProvider =
-        pdfium::MakeUnique<CXFA_TextProvider>(pNode, XFA_TEXTPROVIDERTYPE_Text);
-    m_pTextLayout =
-        pdfium::MakeUnique<CXFA_TextLayout>(doc, m_pTextProvider.get());
+    m_pTextProvider = cppgc::MakeGarbageCollected<CXFA_TextProvider>(
+        doc->GetHeap()->GetAllocationHandle(), pNode,
+        CXFA_TextProvider::Type::kText);
+    m_pTextLayout = cppgc::MakeGarbageCollected<CXFA_TextLayout>(
+        doc->GetHeap()->GetAllocationHandle(), doc, m_pTextProvider);
   }
 
  private:
-  std::unique_ptr<CXFA_TextLayout> m_pTextLayout;
-  std::unique_ptr<CXFA_TextProvider> m_pTextProvider;
+  CXFA_TextLayoutData() = default;
+
+  cppgc::Member<CXFA_TextLayout> m_pTextLayout;
+  cppgc::Member<CXFA_TextProvider> m_pTextProvider;
 };
 
 class CXFA_ImageLayoutData final : public CXFA_WidgetLayoutData {
  public:
-  CXFA_ImageLayoutData() = default;
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_ImageLayoutData() override = default;
 
   CXFA_ImageLayoutData* AsImageLayoutData() override { return this; }
@@ -866,10 +876,19 @@ class CXFA_ImageLayoutData final : public CXFA_WidgetLayoutData {
     if (!image)
       return false;
 
-    pNode->SetImageImage(XFA_LoadImageData(doc, image, m_bNamedImage,
-                                           m_iImageXDpi, m_iImageYDpi));
+    pNode->SetLayoutImage(XFA_LoadImageData(doc, image, m_bNamedImage,
+                                            m_iImageXDpi, m_iImageYDpi));
     return !!m_pDIBitmap;
   }
+
+  CFX_Size GetDpi() const { return CFX_Size(m_iImageXDpi, m_iImageYDpi); }
+  RetainPtr<CFX_DIBitmap> GetBitmap() { return m_pDIBitmap; }
+  void SetBitmap(RetainPtr<CFX_DIBitmap> pBitmap) {
+    m_pDIBitmap = std::move(pBitmap);
+  }
+
+ private:
+  CXFA_ImageLayoutData() = default;
 
   bool m_bNamedImage = false;
   int32_t m_iImageXDpi = 0;
@@ -879,9 +898,14 @@ class CXFA_ImageLayoutData final : public CXFA_WidgetLayoutData {
 
 class CXFA_FieldLayoutData : public CXFA_WidgetLayoutData {
  public:
-  CXFA_FieldLayoutData() = default;
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_FieldLayoutData() override = default;
 
+  void Trace(cppgc::Visitor* visitor) const override {
+    CXFA_WidgetLayoutData::Trace(visitor);
+    visitor->Trace(m_pCapTextLayout);
+    visitor->Trace(m_pCapTextProvider);
+  }
   CXFA_FieldLayoutData* AsFieldLayoutData() override { return this; }
 
   virtual CXFA_ImageEditData* AsImageEditData() { return nullptr; }
@@ -894,30 +918,37 @@ class CXFA_FieldLayoutData : public CXFA_WidgetLayoutData {
     if (!caption || caption->IsHidden())
       return false;
 
-    m_pCapTextProvider = pdfium::MakeUnique<CXFA_TextProvider>(
-        pNode, XFA_TEXTPROVIDERTYPE_Caption);
-    m_pCapTextLayout =
-        pdfium::MakeUnique<CXFA_TextLayout>(doc, m_pCapTextProvider.get());
+    m_pCapTextProvider = cppgc::MakeGarbageCollected<CXFA_TextProvider>(
+        doc->GetHeap()->GetAllocationHandle(), pNode,
+        CXFA_TextProvider::Type::kCaption);
+    m_pCapTextLayout = cppgc::MakeGarbageCollected<CXFA_TextLayout>(
+        doc->GetHeap()->GetAllocationHandle(), doc, m_pCapTextProvider);
     return true;
   }
 
-  std::unique_ptr<CXFA_TextLayout> m_pCapTextLayout;
-  std::unique_ptr<CXFA_TextProvider> m_pCapTextProvider;
+  cppgc::Member<CXFA_TextLayout> m_pCapTextLayout;
+  cppgc::Member<CXFA_TextProvider> m_pCapTextProvider;
   std::unique_ptr<CFDE_TextOut> m_pTextOut;
   std::vector<float> m_FieldSplitArray;
+
+ protected:
+  CXFA_FieldLayoutData() = default;
 };
 
 class CXFA_TextEditData final : public CXFA_FieldLayoutData {
  public:
-  CXFA_TextEditData() = default;
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_TextEditData() override = default;
 
   CXFA_TextEditData* AsTextEditData() override { return this; }
+
+ protected:
+  CXFA_TextEditData() = default;
 };
 
 class CXFA_ImageEditData final : public CXFA_FieldLayoutData {
  public:
-  CXFA_ImageEditData() = default;
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_ImageEditData() override = default;
 
   CXFA_ImageEditData* AsImageEditData() override { return this; }
@@ -934,10 +965,19 @@ class CXFA_ImageEditData final : public CXFA_FieldLayoutData {
     if (!image)
       return false;
 
-    pNode->SetImageEditImage(XFA_LoadImageData(doc, image, m_bNamedImage,
-                                               m_iImageXDpi, m_iImageYDpi));
+    pNode->SetEditImage(XFA_LoadImageData(doc, image, m_bNamedImage,
+                                          m_iImageXDpi, m_iImageYDpi));
     return !!m_pDIBitmap;
   }
+
+  CFX_Size GetDpi() const { return CFX_Size(m_iImageXDpi, m_iImageYDpi); }
+  RetainPtr<CFX_DIBitmap> GetBitmap() { return m_pDIBitmap; }
+  void SetBitmap(RetainPtr<CFX_DIBitmap> pBitmap) {
+    m_pDIBitmap = std::move(pBitmap);
+  }
+
+ private:
+  CXFA_ImageEditData() = default;
 
   bool m_bNamedImage = false;
   int32_t m_iImageXDpi = 0;
@@ -947,21 +987,30 @@ class CXFA_ImageEditData final : public CXFA_FieldLayoutData {
 
 CXFA_Node::CXFA_Node(CXFA_Document* pDoc,
                      XFA_PacketType ePacket,
-                     uint32_t validPackets,
+                     Mask<XFA_XDPPACKET> validPackets,
                      XFA_ObjectType oType,
                      XFA_Element eType,
                      pdfium::span<const PropertyData> properties,
                      pdfium::span<const AttributeData> attributes,
-                     std::unique_ptr<CJX_Object> js_object)
-    : CXFA_Object(pDoc, oType, eType, std::move(js_object)),
+                     CJX_Object* js_object)
+    : CXFA_Object(pDoc, oType, eType, js_object),
       m_Properties(properties),
       m_Attributes(attributes),
       m_ValidPackets(validPackets),
       m_ePacket(ePacket) {
-  ASSERT(m_pDocument);
+  DCHECK(m_pDocument);
 }
 
 CXFA_Node::~CXFA_Node() = default;
+
+void CXFA_Node::Trace(cppgc::Visitor* visitor) const {
+  CXFA_Object::Trace(visitor);
+  GCedTreeNodeMixin<CXFA_Node>::Trace(visitor);
+  visitor->Trace(m_pAuxNode);
+  ContainerTrace(visitor, binding_nodes_);
+  visitor->Trace(m_pLayoutData);
+  visitor->Trace(ui_);
+}
 
 CXFA_Node* CXFA_Node::Clone(bool bRecursive) {
   CXFA_Node* pClone = m_pDocument->CreateNode(m_ePacket, m_elementType);
@@ -999,7 +1048,7 @@ CXFA_Node* CXFA_Node::Clone(bool bRecursive) {
       pClone->InsertChildAndNotify(pChild->Clone(bRecursive), nullptr);
     }
   }
-  pClone->SetFlagAndNotify(XFA_NodeFlag_Initialized);
+  pClone->SetInitializedFlagAndNotify();
   pClone->SetBindingNode(nullptr);
   return pClone;
 }
@@ -1037,12 +1086,13 @@ CXFA_Node* CXFA_Node::GetContainerParent() const {
 }
 
 bool CXFA_Node::IsValidInPacket(XFA_PacketType packet) const {
-  return !!(m_ValidPackets & (1 << static_cast<uint8_t>(packet)));
+  uint32_t bitflag = 1 << static_cast<uint8_t>(packet);
+  return !!(m_ValidPackets & static_cast<XFA_XDPPACKET>(bitflag));
 }
 
 const CXFA_Node::PropertyData* CXFA_Node::GetPropertyData(
     XFA_Element property) const {
-  ASSERT(property != XFA_Element::Unknown);
+  DCHECK(property != XFA_Element::Unknown);
   for (const auto& prop : m_Properties) {
     if (prop.property == property)
       return &prop;
@@ -1054,20 +1104,21 @@ bool CXFA_Node::HasProperty(XFA_Element property) const {
   return !!GetPropertyData(property);
 }
 
-bool CXFA_Node::HasPropertyFlags(XFA_Element property, uint8_t flags) const {
+bool CXFA_Node::HasPropertyFlag(XFA_Element property,
+                                XFA_PropertyFlag flag) const {
   const PropertyData* data = GetPropertyData(property);
-  return data && !!(data->flags & flags);
+  return data && !!(data->flags & flag);
 }
 
-uint8_t CXFA_Node::PropertyOccuranceCount(XFA_Element property) const {
+uint8_t CXFA_Node::PropertyOccurrenceCount(XFA_Element property) const {
   const PropertyData* data = GetPropertyData(property);
-  return data ? data->occurance_count : 0;
+  return data ? data->occurrence_count : 0;
 }
 
 std::pair<CXFA_Node*, int32_t> CXFA_Node::GetProperty(
     int32_t index,
     XFA_Element eProperty) const {
-  if (index < 0 || index >= PropertyOccuranceCount(eProperty))
+  if (index < 0 || index >= PropertyOccurrenceCount(eProperty))
     return {nullptr, 0};
 
   int32_t iCount = 0;
@@ -1084,7 +1135,7 @@ std::pair<CXFA_Node*, int32_t> CXFA_Node::GetProperty(
 
 CXFA_Node* CXFA_Node::GetOrCreateProperty(int32_t index,
                                           XFA_Element eProperty) {
-  if (index < 0 || index >= PropertyOccuranceCount(eProperty))
+  if (index < 0 || index >= PropertyOccurrenceCount(eProperty))
     return nullptr;
 
   int32_t iCount = 0;
@@ -1093,10 +1144,10 @@ CXFA_Node* CXFA_Node::GetOrCreateProperty(int32_t index,
   if (node)
     return node;
 
-  if (HasPropertyFlags(eProperty, XFA_PROPERTYFLAG_OneOf)) {
+  if (HasPropertyFlag(eProperty, XFA_PropertyFlag::kOneOf)) {
     for (CXFA_Node* pNode = GetFirstChild(); pNode;
          pNode = pNode->GetNextSibling()) {
-      if (HasPropertyFlags(pNode->GetElementType(), XFA_PROPERTYFLAG_OneOf)) {
+      if (HasPropertyFlag(pNode->GetElementType(), XFA_PropertyFlag::kOneOf)) {
         return nullptr;
       }
     }
@@ -1109,22 +1160,23 @@ CXFA_Node* CXFA_Node::GetOrCreateProperty(int32_t index,
       return nullptr;
 
     InsertChildAndNotify(pNewNode, nullptr);
-    pNewNode->SetFlagAndNotify(XFA_NodeFlag_Initialized);
+    pNewNode->SetInitializedFlagAndNotify();
   }
   return pNewNode;
 }
 
-Optional<XFA_Element> CXFA_Node::GetFirstPropertyWithFlag(uint8_t flag) const {
+absl::optional<XFA_Element> CXFA_Node::GetFirstPropertyWithFlag(
+    XFA_PropertyFlag flag) const {
   for (const auto& prop : m_Properties) {
     if (prop.flags & flag)
       return prop.property;
   }
-  return {};
+  return absl::nullopt;
 }
 
 const CXFA_Node::AttributeData* CXFA_Node::GetAttributeData(
     XFA_Attribute attr) const {
-  ASSERT(attr != XFA_Attribute::Unknown);
+  DCHECK(attr != XFA_Attribute::Unknown);
   for (const auto& cur_attr : m_Attributes) {
     if (cur_attr.attribute == attr)
       return &cur_attr;
@@ -1157,29 +1209,32 @@ std::vector<CXFA_Node*> CXFA_Node::GetNodeListForType(XFA_Element eTypeFilter) {
 }
 
 std::vector<CXFA_Node*> CXFA_Node::GetNodeListWithFilter(
-    uint32_t dwTypeFilter) {
+    Mask<XFA_NodeFilter> dwFilter) {
+  if (!dwFilter)
+    return std::vector<CXFA_Node*>();
+
+  const bool bFilterChildren = !!(dwFilter & XFA_NodeFilter::kChildren);
+  const bool bFilterProperties = !!(dwFilter & XFA_NodeFilter::kProperties);
+  const bool bFilterOneOfProperties =
+      !!(dwFilter & XFA_NodeFilter::kOneOfProperty);
+
   std::vector<CXFA_Node*> nodes;
-  if (dwTypeFilter == (XFA_NODEFILTER_Children | XFA_NODEFILTER_Properties)) {
+  if (bFilterChildren && bFilterProperties && !bFilterOneOfProperties) {
     for (CXFA_Node* pChild = GetFirstChild(); pChild;
-         pChild = pChild->GetNextSibling())
+         pChild = pChild->GetNextSibling()) {
       nodes.push_back(pChild);
+    }
     return nodes;
   }
 
-  if (dwTypeFilter == 0)
-    return nodes;
-
-  bool bFilterChildren = !!(dwTypeFilter & XFA_NODEFILTER_Children);
-  bool bFilterProperties = !!(dwTypeFilter & XFA_NODEFILTER_Properties);
-  bool bFilterOneOfProperties = !!(dwTypeFilter & XFA_NODEFILTER_OneOfProperty);
   for (CXFA_Node* pChild = GetFirstChild(); pChild;
        pChild = pChild->GetNextSibling()) {
     if (HasProperty(pChild->GetElementType())) {
       if (bFilterProperties) {
         nodes.push_back(pChild);
       } else if (bFilterOneOfProperties &&
-                 HasPropertyFlags(pChild->GetElementType(),
-                                  XFA_PROPERTYFLAG_OneOf)) {
+                 HasPropertyFlag(pChild->GetElementType(),
+                                 XFA_PropertyFlag::kOneOf)) {
         nodes.push_back(pChild);
       } else if (bFilterChildren &&
                  (pChild->GetElementType() == XFA_Element::Variables ||
@@ -1194,8 +1249,8 @@ std::vector<CXFA_Node*> CXFA_Node::GetNodeListWithFilter(
   if (!bFilterOneOfProperties || !nodes.empty())
     return nodes;
 
-  Optional<XFA_Element> property =
-      GetFirstPropertyWithFlag(XFA_PROPERTYFLAG_DefaultOneOf);
+  absl::optional<XFA_Element> property =
+      GetFirstPropertyWithFlag(XFA_PropertyFlag::kDefaultOneOf);
   if (!property.has_value())
     return nodes;
 
@@ -1203,7 +1258,7 @@ std::vector<CXFA_Node*> CXFA_Node::GetNodeListWithFilter(
       m_pDocument->CreateNode(GetPacketType(), property.value());
   if (pNewNode) {
     InsertChildAndNotify(pNewNode, nullptr);
-    pNewNode->SetFlagAndNotify(XFA_NodeFlag_Initialized);
+    pNewNode->SetInitializedFlagAndNotify();
     nodes.push_back(pNewNode);
   }
   return nodes;
@@ -1214,12 +1269,12 @@ CXFA_Node* CXFA_Node::CreateSamePacketNode(XFA_Element eType) {
   if (!pNode)
     return nullptr;
 
-  pNode->SetFlagAndNotify(XFA_NodeFlag_Initialized);
+  pNode->SetInitializedFlagAndNotify();
   return pNode;
 }
 
 CXFA_Node* CXFA_Node::CloneTemplateToForm(bool bRecursive) {
-  ASSERT(m_ePacket == XFA_PacketType::Template);
+  DCHECK_EQ(m_ePacket, XFA_PacketType::Template);
   CXFA_Node* pClone =
       m_pDocument->CreateNode(XFA_PacketType::Form, m_elementType);
   if (!pClone)
@@ -1235,7 +1290,7 @@ CXFA_Node* CXFA_Node::CloneTemplateToForm(bool bRecursive) {
                                    nullptr);
     }
   }
-  pClone->SetFlagAndNotify(XFA_NodeFlag_Initialized);
+  pClone->SetInitializedFlagAndNotify();
   return pClone;
 }
 
@@ -1248,44 +1303,38 @@ void CXFA_Node::SetTemplateNode(CXFA_Node* pTemplateNode) {
 }
 
 CXFA_Node* CXFA_Node::GetBindData() {
-  ASSERT(GetPacketType() == XFA_PacketType::Form);
+  DCHECK_EQ(GetPacketType(), XFA_PacketType::Form);
   return GetBindingNode();
 }
 
-int32_t CXFA_Node::AddBindItem(CXFA_Node* pFormNode) {
-  ASSERT(pFormNode);
+std::vector<CXFA_Node*> CXFA_Node::GetBindItemsCopy() const {
+  return std::vector<CXFA_Node*>(binding_nodes_.begin(), binding_nodes_.end());
+}
+
+void CXFA_Node::AddBindItem(CXFA_Node* pFormNode) {
+  DCHECK(pFormNode);
 
   if (BindsFormItems()) {
-    bool found = false;
-    for (auto* v : binding_nodes_) {
-      if (v == pFormNode) {
-        found = true;
-        break;
-      }
-    }
-    if (!found)
+    if (!pdfium::Contains(binding_nodes_, pFormNode))
       binding_nodes_.emplace_back(pFormNode);
-    return pdfium::CollectionSize<int32_t>(binding_nodes_);
+    return;
   }
 
   CXFA_Node* pOldFormItem = GetBindingNode();
   if (!pOldFormItem) {
     SetBindingNode(pFormNode);
-    return 1;
+    return;
   }
   if (pOldFormItem == pFormNode)
-    return 1;
+    return;
 
-  std::vector<CXFA_Node*> items;
-  items.push_back(pOldFormItem);
-  items.push_back(pFormNode);
-  binding_nodes_ = std::move(items);
-
-  m_uNodeFlags |= XFA_NodeFlag_BindFormItems;
-  return 2;
+  binding_nodes_.clear();
+  binding_nodes_.push_back(pOldFormItem);
+  binding_nodes_.push_back(pFormNode);
+  m_uNodeFlags |= XFA_NodeFlag::kBindFormItems;
 }
 
-int32_t CXFA_Node::RemoveBindItem(CXFA_Node* pFormNode) {
+bool CXFA_Node::RemoveBindItem(CXFA_Node* pFormNode) {
   if (BindsFormItems()) {
     auto it =
         std::find(binding_nodes_.begin(), binding_nodes_.end(), pFormNode);
@@ -1293,18 +1342,18 @@ int32_t CXFA_Node::RemoveBindItem(CXFA_Node* pFormNode) {
       binding_nodes_.erase(it);
 
     if (binding_nodes_.size() == 1) {
-      m_uNodeFlags &= ~XFA_NodeFlag_BindFormItems;
-      return 1;
+      m_uNodeFlags.Clear(XFA_NodeFlag::kBindFormItems);
+      return true;
     }
-    return pdfium::CollectionSize<int32_t>(binding_nodes_);
+    return !binding_nodes_.empty();
   }
 
   CXFA_Node* pOldFormItem = GetBindingNode();
   if (pOldFormItem != pFormNode)
-    return pOldFormItem ? 1 : 0;
+    return !!pOldFormItem;
 
   SetBindingNode(nullptr);
-  return 0;
+  return false;
 }
 
 bool CXFA_Node::HasBindItem() const {
@@ -1325,7 +1374,7 @@ CXFA_Node* CXFA_Node::GetContainerNode() {
     if (IsChoiceListMultiSelect())
       return nullptr;
 
-    WideString wsPicture = GetPictureContent(XFA_VALUEPICTURE_DataBind);
+    WideString wsPicture = GetPictureContent(XFA_ValuePicture::kDataBind);
     if (!wsPicture.IsEmpty())
       return this;
 
@@ -1339,7 +1388,7 @@ CXFA_Node* CXFA_Node::GetContainerNode() {
         continue;
       pFieldNode = pFormNode->IsWidgetReady() ? pFormNode : nullptr;
       if (pFieldNode)
-        wsPicture = pFieldNode->GetPictureContent(XFA_VALUEPICTURE_DataBind);
+        wsPicture = pFieldNode->GetPictureContent(XFA_ValuePicture::kDataBind);
       if (!wsPicture.IsEmpty())
         break;
 
@@ -1364,8 +1413,8 @@ CXFA_Node* CXFA_Node::GetContainerNode() {
   return pParentOfValueNode ? pParentOfValueNode->GetContainerNode() : nullptr;
 }
 
-LocaleIface* CXFA_Node::GetLocale() {
-  Optional<WideString> localeName = GetLocaleName();
+GCedLocaleIface* CXFA_Node::GetLocale() {
+  absl::optional<WideString> localeName = GetLocaleName();
   if (!localeName.has_value())
     return nullptr;
   if (localeName.value().EqualsASCII("ambient"))
@@ -1373,42 +1422,42 @@ LocaleIface* CXFA_Node::GetLocale() {
   return GetDocument()->GetLocaleMgr()->GetLocaleByName(localeName.value());
 }
 
-Optional<WideString> CXFA_Node::GetLocaleName() {
+absl::optional<WideString> CXFA_Node::GetLocaleName() {
   CXFA_Node* pForm = ToNode(GetDocument()->GetXFAObject(XFA_HASHCODE_Form));
   if (!pForm)
-    return {};
+    return absl::nullopt;
 
   CXFA_Subform* pTopSubform =
       pForm->GetFirstChildByClass<CXFA_Subform>(XFA_Element::Subform);
   if (!pTopSubform)
-    return {};
+    return absl::nullopt;
 
+  absl::optional<WideString> localeName;
   CXFA_Node* pLocaleNode = this;
   do {
-    Optional<WideString> localeName =
+    localeName =
         pLocaleNode->JSObject()->TryCData(XFA_Attribute::Locale, false);
-    if (localeName)
+    if (localeName.has_value())
       return localeName;
 
     pLocaleNode = pLocaleNode->GetParent();
   } while (pLocaleNode && pLocaleNode != pTopSubform);
 
   CXFA_Node* pConfig = ToNode(GetDocument()->GetXFAObject(XFA_HASHCODE_Config));
-  WideString wsLocaleName =
-      GetDocument()->GetLocaleMgr()->GetConfigLocaleName(pConfig);
-  if (!wsLocaleName.IsEmpty())
-    return wsLocaleName;
+  localeName = GetDocument()->GetLocaleMgr()->GetConfigLocaleName(pConfig);
+  if (localeName.has_value())
+    return localeName;
 
   if (pTopSubform) {
-    Optional<WideString> localeName =
+    localeName =
         pTopSubform->JSObject()->TryCData(XFA_Attribute::Locale, false);
-    if (localeName)
+    if (localeName.has_value())
       return localeName;
   }
 
   LocaleIface* pLocale = GetDocument()->GetLocaleMgr()->GetDefLocale();
   if (!pLocale)
-    return {};
+    return absl::nullopt;
 
   return pLocale->GetName();
 }
@@ -1419,9 +1468,10 @@ XFA_AttributeValue CXFA_Node::GetIntact() {
   XFA_AttributeValue eLayoutType =
       layout.value_or(XFA_AttributeValue::Position);
   if (pKeep) {
-    Optional<XFA_AttributeValue> intact = GetIntactFromKeep(pKeep, eLayoutType);
-    if (intact)
-      return *intact;
+    absl::optional<XFA_AttributeValue> intact =
+        GetIntactFromKeep(pKeep, eLayoutType);
+    if (intact.has_value())
+      return intact.value();
   }
 
   switch (GetElementType()) {
@@ -1451,9 +1501,9 @@ XFA_AttributeValue CXFA_Node::GetIntact() {
 
       XFA_VERSION version = m_pDocument->GetCurVersionMode();
       if (eParLayout == XFA_AttributeValue::Tb && version < XFA_VERSION_208) {
-        Optional<CXFA_Measurement> measureH =
+        absl::optional<CXFA_Measurement> measureH =
             JSObject()->TryMeasure(XFA_Attribute::H, false);
-        if (measureH)
+        if (measureH.has_value())
           return XFA_AttributeValue::ContentArea;
       }
       return XFA_AttributeValue::None;
@@ -1485,7 +1535,7 @@ CXFA_Node* CXFA_Node::GetDataDescriptionNode() {
 }
 
 void CXFA_Node::SetDataDescriptionNode(CXFA_Node* pDataDescriptionNode) {
-  ASSERT(m_ePacket == XFA_PacketType::Datasets);
+  DCHECK_EQ(m_ePacket, XFA_PacketType::Datasets);
   m_pAuxNode = pDataDescriptionNode;
 }
 
@@ -1545,6 +1595,15 @@ CXFA_Node* CXFA_Node::GetChildInternal(size_t index,
   return nullptr;
 }
 
+bool CXFA_Node::IsAncestorOf(const CXFA_Node* that) const {
+  while (that) {
+    if (this == that)
+      return true;
+    that = that->GetParent();
+  }
+  return false;
+}
+
 void CXFA_Node::InsertChildAndNotify(int32_t index, CXFA_Node* pNode) {
   InsertChildAndNotify(pNode, GetNthChild(index));
 }
@@ -1552,7 +1611,7 @@ void CXFA_Node::InsertChildAndNotify(int32_t index, CXFA_Node* pNode) {
 void CXFA_Node::InsertChildAndNotify(CXFA_Node* pNode, CXFA_Node* pBeforeNode) {
   CHECK(!pNode->GetParent());
   CHECK(!pBeforeNode || pBeforeNode->GetParent() == this);
-  pNode->ClearFlag(XFA_NodeFlag_HasRemovedChildren);
+  pNode->ClearFlag(XFA_NodeFlag::kHasRemovedChildren);
   InsertBefore(pNode, pBeforeNode);
 
   CXFA_FFNotify* pNotify = m_pDocument->GetNotify();
@@ -1562,9 +1621,9 @@ void CXFA_Node::InsertChildAndNotify(CXFA_Node* pNode, CXFA_Node* pBeforeNode) {
   if (!IsNeedSavingXMLNode() || !pNode->xml_node_)
     return;
 
-  ASSERT(!pNode->xml_node_->GetParent());
-  xml_node_->InsertBefore(pNode->xml_node_.Get(),
-                          pBeforeNode ? pBeforeNode->xml_node_.Get() : nullptr);
+  DCHECK(!pNode->xml_node_->GetParent());
+  xml_node_->InsertBefore(pNode->xml_node_,
+                          pBeforeNode ? pBeforeNode->xml_node_ : nullptr);
 }
 
 void CXFA_Node::RemoveChildAndNotify(CXFA_Node* pNode, bool bNotify) {
@@ -1572,20 +1631,20 @@ void CXFA_Node::RemoveChildAndNotify(CXFA_Node* pNode, bool bNotify) {
   if (pNode->GetParent() != this)
     return;
 
-  pNode->SetFlag(XFA_NodeFlag_HasRemovedChildren);
-  TreeNode<CXFA_Node>::RemoveChild(pNode);
+  pNode->SetFlag(XFA_NodeFlag::kHasRemovedChildren);
+  GCedTreeNodeMixin<CXFA_Node>::RemoveChild(pNode);
   OnRemoved(bNotify);
 
   if (!IsNeedSavingXMLNode() || !pNode->xml_node_)
     return;
 
   if (!pNode->IsAttributeInXML()) {
-    xml_node_->RemoveChild(pNode->xml_node_.Get());
+    xml_node_->RemoveChild(pNode->xml_node_);
     return;
   }
 
-  ASSERT(pNode->xml_node_ == xml_node_);
-  CFX_XMLElement* pXMLElement = ToXMLElement(pNode->xml_node_.Get());
+  DCHECK_EQ(pNode->xml_node_, xml_node_);
+  CFX_XMLElement* pXMLElement = ToXMLElement(pNode->xml_node_);
   if (pXMLElement) {
     WideString wsAttributeName =
         pNode->JSObject()->GetCData(XFA_Attribute::QualifiedName);
@@ -1608,7 +1667,7 @@ void CXFA_Node::RemoveChildAndNotify(CXFA_Node* pNode, bool bNotify) {
 }
 
 CXFA_Node* CXFA_Node::GetFirstChildByName(WideStringView wsName) const {
-  return GetFirstChildByName(FX_HashCode_GetW(wsName, false));
+  return GetFirstChildByName(FX_HashCode_GetW(wsName));
 }
 
 CXFA_Node* CXFA_Node::GetFirstChildByName(uint32_t dwNameHash) const {
@@ -1640,7 +1699,7 @@ CXFA_Node* CXFA_Node::GetNextSameNameSibling(uint32_t dwNameHash) const {
 
 CXFA_Node* CXFA_Node::GetNextSameNameSiblingInternal(
     WideStringView wsNodeName) const {
-  return GetNextSameNameSibling(FX_HashCode_GetW(wsNodeName, false));
+  return GetNextSameNameSibling(FX_HashCode_GetW(wsNodeName));
 }
 
 CXFA_Node* CXFA_Node::GetNextSameClassSiblingInternal(XFA_Element eType) const {
@@ -1653,7 +1712,7 @@ CXFA_Node* CXFA_Node::GetNextSameClassSiblingInternal(XFA_Element eType) const {
 }
 
 CXFA_Node* CXFA_Node::GetOneChildNamed(WideStringView wsName) {
-  return FindFirstSiblingNamed(this, FX_HashCode_GetW(wsName, false));
+  return FindFirstSiblingNamed(this, FX_HashCode_GetW(wsName));
 }
 
 CXFA_Node* CXFA_Node::GetOneChildOfClass(WideStringView wsClass) {
@@ -1676,7 +1735,7 @@ std::vector<CXFA_Node*> CXFA_Node::GetSiblings(bool bIsClassName) {
   }
 
   uint32_t dwNameHash = bIsClassName ? GetClassHashCode() : GetNameHash();
-  TraverseSiblings(parent, dwNameHash, &siblings, bIsClassName, true);
+  TraversePropertiesOrSiblings(parent, dwNameHash, &siblings, bIsClassName);
   return siblings;
 }
 
@@ -1692,7 +1751,7 @@ size_t CXFA_Node::GetIndex(bool bIsProperty, bool bIsClassIndex) {
   }
   uint32_t dwHashName = bIsClassIndex ? GetClassHashCode() : GetNameHash();
   std::vector<CXFA_Node*> siblings;
-  TraverseSiblings(parent, dwHashName, &siblings, bIsClassIndex, true);
+  TraversePropertiesOrSiblings(parent, dwHashName, &siblings, bIsClassIndex);
   for (size_t i = 0; i < siblings.size(); ++i) {
     if (siblings[i] == this)
       return i;
@@ -1744,29 +1803,26 @@ CXFA_Occur* CXFA_Node::GetOccurIfExists() {
 bool CXFA_Node::HasFlag(XFA_NodeFlag dwFlag) const {
   if (m_uNodeFlags & dwFlag)
     return true;
-  if (dwFlag == XFA_NodeFlag_HasRemovedChildren)
+  if (dwFlag == XFA_NodeFlag::kHasRemovedChildren)
     return GetParent() && GetParent()->HasFlag(dwFlag);
   return false;
 }
 
-void CXFA_Node::SetFlagAndNotify(uint32_t dwFlag) {
-  ASSERT(dwFlag == XFA_NodeFlag_Initialized);
-
+void CXFA_Node::SetInitializedFlagAndNotify() {
   if (!IsInitialized()) {
     CXFA_FFNotify* pNotify = m_pDocument->GetNotify();
-    if (pNotify) {
+    if (pNotify)
       pNotify->OnNodeReady(this);
-    }
   }
+  m_uNodeFlags |= XFA_NodeFlag::kInitialized;
+}
+
+void CXFA_Node::SetFlag(XFA_NodeFlag dwFlag) {
   m_uNodeFlags |= dwFlag;
 }
 
-void CXFA_Node::SetFlag(uint32_t dwFlag) {
-  m_uNodeFlags |= dwFlag;
-}
-
-void CXFA_Node::ClearFlag(uint32_t dwFlag) {
-  m_uNodeFlags &= ~dwFlag;
+void CXFA_Node::ClearFlag(XFA_NodeFlag dwFlag) {
+  m_uNodeFlags.Clear(dwFlag);
 }
 
 bool CXFA_Node::IsAttributeInXML() {
@@ -1785,7 +1841,7 @@ void CXFA_Node::OnRemoved(bool bNotify) const {
 
 void CXFA_Node::UpdateNameHash() {
   WideString wsName = JSObject()->GetCData(XFA_Attribute::Name);
-  m_dwNameHash = FX_HashCode_GetW(wsName.AsStringView(), false);
+  m_dwNameHash = FX_HashCode_GetW(wsName.AsStringView());
 }
 
 CFX_XMLNode* CXFA_Node::CreateXMLMappingNode() {
@@ -1793,7 +1849,7 @@ CFX_XMLNode* CXFA_Node::CreateXMLMappingNode() {
     xml_node_ = GetXMLDocument()->CreateNode<CFX_XMLElement>(
         JSObject()->GetCData(XFA_Attribute::Name));
   }
-  return xml_node_.Get();
+  return xml_node_;
 }
 
 bool CXFA_Node::IsNeedSavingXMLNode() const {
@@ -1878,29 +1934,25 @@ void CXFA_Node::InsertItem(CXFA_Node* pNewInstance,
         iCount > 0 ? item->GetNextSibling() : GetNextSibling();
     GetParent()->InsertChildAndNotify(pNewInstance, pNextSibling);
     if (bMoveDataBindingNodes) {
-      std::set<CXFA_Node*> sNew;
-      std::set<CXFA_Node*> sAfter;
+      NodeSet sNew;
       CXFA_NodeIteratorTemplate<CXFA_Node,
                                 CXFA_TraverseStrategy_XFAContainerNode>
           sIteratorNew(pNewInstance);
       for (CXFA_Node* pNode = sIteratorNew.GetCurrent(); pNode;
            pNode = sIteratorNew.MoveToNext()) {
         CXFA_Node* pDataNode = pNode->GetBindData();
-        if (!pDataNode)
-          continue;
-
-        sNew.insert(pDataNode);
+        if (pDataNode)
+          sNew.insert(pDataNode);
       }
+      NodeSet sAfter;
       CXFA_NodeIteratorTemplate<CXFA_Node,
                                 CXFA_TraverseStrategy_XFAContainerNode>
           sIteratorAfter(pNextSibling);
       for (CXFA_Node* pNode = sIteratorAfter.GetCurrent(); pNode;
            pNode = sIteratorAfter.MoveToNext()) {
         CXFA_Node* pDataNode = pNode->GetBindData();
-        if (!pDataNode)
-          continue;
-
-        sAfter.insert(pDataNode);
+        if (pDataNode)
+          sAfter.insert(pDataNode);
       }
       ReorderDataNodes(sNew, sAfter, false);
     }
@@ -1913,29 +1965,25 @@ void CXFA_Node::InsertItem(CXFA_Node* pNewInstance,
 
     GetParent()->InsertChildAndNotify(pNewInstance, pBeforeInstance);
     if (bMoveDataBindingNodes) {
-      std::set<CXFA_Node*> sNew;
-      std::set<CXFA_Node*> sBefore;
+      NodeSet sNew;
       CXFA_NodeIteratorTemplate<CXFA_Node,
                                 CXFA_TraverseStrategy_XFAContainerNode>
           sIteratorNew(pNewInstance);
       for (CXFA_Node* pNode = sIteratorNew.GetCurrent(); pNode;
            pNode = sIteratorNew.MoveToNext()) {
         CXFA_Node* pDataNode = pNode->GetBindData();
-        if (!pDataNode)
-          continue;
-
-        sNew.insert(pDataNode);
+        if (pDataNode)
+          sNew.insert(pDataNode);
       }
+      NodeSet sBefore;
       CXFA_NodeIteratorTemplate<CXFA_Node,
                                 CXFA_TraverseStrategy_XFAContainerNode>
           sIteratorBefore(pBeforeInstance);
       for (CXFA_Node* pNode = sIteratorBefore.GetCurrent(); pNode;
            pNode = sIteratorBefore.MoveToNext()) {
         CXFA_Node* pDataNode = pNode->GetBindData();
-        if (!pDataNode)
-          continue;
-
-        sBefore.insert(pDataNode);
+        if (pDataNode)
+          sBefore.insert(pDataNode);
       }
       ReorderDataNodes(sNew, sBefore, true);
     }
@@ -1956,7 +2004,7 @@ void CXFA_Node::RemoveItem(CXFA_Node* pRemoveInstance,
     if (!pDataNode)
       continue;
 
-    if (pDataNode->RemoveBindItem(pFormNode) == 0) {
+    if (!pDataNode->RemoveBindItem(pFormNode)) {
       if (CXFA_Node* pDataParent = pDataNode->GetParent()) {
         pDataParent->RemoveChildAndNotify(pDataNode, true);
       }
@@ -1982,7 +2030,7 @@ CXFA_Node* CXFA_Node::CreateInstanceIfPossible(bool bDataMerge) {
   }
   if (!pDataScope) {
     pDataScope = ToNode(pDocument->GetXFAObject(XFA_HASHCODE_Record));
-    ASSERT(pDataScope);
+    DCHECK(pDataScope);
   }
 
   CXFA_Node* pInstance = pDocument->DataMerge_CopyContainer(
@@ -1994,54 +2042,58 @@ CXFA_Node* CXFA_Node::CreateInstanceIfPossible(bool bDataMerge) {
   return pInstance;
 }
 
-Optional<bool> CXFA_Node::GetDefaultBoolean(XFA_Attribute attr) const {
-  Optional<void*> value = GetDefaultValue(attr, XFA_AttributeType::Boolean);
-  if (!value)
-    return {};
-  return {!!*value};
+absl::optional<bool> CXFA_Node::GetDefaultBoolean(XFA_Attribute attr) const {
+  absl::optional<void*> value =
+      GetDefaultValue(attr, XFA_AttributeType::Boolean);
+  if (!value.has_value())
+    return absl::nullopt;
+  return !!value.value();
 }
 
-Optional<int32_t> CXFA_Node::GetDefaultInteger(XFA_Attribute attr) const {
-  Optional<void*> value = GetDefaultValue(attr, XFA_AttributeType::Integer);
-  if (!value)
-    return {};
-  return {static_cast<int32_t>(reinterpret_cast<uintptr_t>(*value))};
+absl::optional<int32_t> CXFA_Node::GetDefaultInteger(XFA_Attribute attr) const {
+  absl::optional<void*> value =
+      GetDefaultValue(attr, XFA_AttributeType::Integer);
+  if (!value.has_value())
+    return absl::nullopt;
+  return static_cast<int32_t>(reinterpret_cast<uintptr_t>(value.value()));
 }
 
-Optional<CXFA_Measurement> CXFA_Node::GetDefaultMeasurement(
+absl::optional<CXFA_Measurement> CXFA_Node::GetDefaultMeasurement(
     XFA_Attribute attr) const {
-  Optional<void*> value = GetDefaultValue(attr, XFA_AttributeType::Measure);
-  if (!value)
-    return {};
+  absl::optional<void*> value =
+      GetDefaultValue(attr, XFA_AttributeType::Measure);
+  if (!value.has_value())
+    return absl::nullopt;
 
-  WideString str = WideString(static_cast<const wchar_t*>(*value));
-  return {CXFA_Measurement(str.AsStringView())};
+  WideString str = WideString(static_cast<const wchar_t*>(value.value()));
+  return CXFA_Measurement(str.AsStringView());
 }
 
-Optional<WideString> CXFA_Node::GetDefaultCData(XFA_Attribute attr) const {
-  Optional<void*> value = GetDefaultValue(attr, XFA_AttributeType::CData);
-  if (!value)
-    return {};
-
-  return {WideString(static_cast<const wchar_t*>(*value))};
-}
-
-Optional<XFA_AttributeValue> CXFA_Node::GetDefaultEnum(
+absl::optional<WideString> CXFA_Node::GetDefaultCData(
     XFA_Attribute attr) const {
-  Optional<void*> value = GetDefaultValue(attr, XFA_AttributeType::Enum);
-  if (!value)
-    return {};
-  return {static_cast<XFA_AttributeValue>(reinterpret_cast<uintptr_t>(*value))};
+  absl::optional<void*> value = GetDefaultValue(attr, XFA_AttributeType::CData);
+  if (!value.has_value())
+    return absl::nullopt;
+
+  return WideString(static_cast<const wchar_t*>(value.value()));
 }
 
-Optional<void*> CXFA_Node::GetDefaultValue(XFA_Attribute attr,
-                                           XFA_AttributeType eType) const {
+absl::optional<XFA_AttributeValue> CXFA_Node::GetDefaultEnum(
+    XFA_Attribute attr) const {
+  absl::optional<void*> value = GetDefaultValue(attr, XFA_AttributeType::Enum);
+  if (!value.has_value())
+    return absl::nullopt;
+  return static_cast<XFA_AttributeValue>(
+      reinterpret_cast<uintptr_t>(value.value()));
+}
+
+absl::optional<void*> CXFA_Node::GetDefaultValue(
+    XFA_Attribute attr,
+    XFA_AttributeType eType) const {
   const AttributeData* data = GetAttributeData(attr);
-  if (!data)
-    return {};
-  if (data->type == eType)
-    return {data->default_value};
-  return {};
+  if (!data || data->type != eType)
+    return absl::nullopt;
+  return data->default_value;
 }
 
 void CXFA_Node::SendAttributeChangeMessage(XFA_Attribute eAttribute,
@@ -2140,7 +2192,7 @@ void CXFA_Node::SendAttributeChangeMessage(XFA_Attribute eAttribute,
     case XFA_Element::Field:
     case XFA_Element::Subform:
     case XFA_Element::SubformSet:
-      pNotify->OnContainerChanged(this);
+      pNotify->OnContainerChanged();
       pNotify->OnValueChanged(this, eAttribute, this, this);
       break;
     case XFA_Element::Sharptext:
@@ -2188,7 +2240,7 @@ void CXFA_Node::SendAttributeChangeMessage(XFA_Attribute eAttribute,
     pParent = pParent->GetParent();
 
   if (pParent)
-    pNotify->OnContainerChanged(pParent);
+    pNotify->OnContainerChanged();
 }
 
 void CXFA_Node::SyncValue(const WideString& wsValue, bool bNotify) {
@@ -2200,14 +2252,14 @@ void CXFA_Node::SyncValue(const WideString& wsValue, bool bNotify) {
   JSObject()->SetContent(wsValue, wsFormatValue, bNotify, false, true);
 }
 
-WideString CXFA_Node::GetRawValue() {
+WideString CXFA_Node::GetRawValue() const {
   return JSObject()->GetContent(false);
 }
 
 int32_t CXFA_Node::GetRotate() const {
-  Optional<int32_t> degrees =
+  absl::optional<int32_t> degrees =
       JSObject()->TryInteger(XFA_Attribute::Rotate, false);
-  return degrees ? XFA_MapRotation(*degrees) / 90 * 90 : 0;
+  return degrees.has_value() ? XFA_MapRotation(degrees.value()) / 90 * 90 : 0;
 }
 
 CXFA_Border* CXFA_Node::GetBorderIfExists() const {
@@ -2297,13 +2349,13 @@ CXFA_Bind* CXFA_Node::GetBindIfExists() const {
   return JSObject()->GetProperty<CXFA_Bind>(0, XFA_Element::Bind);
 }
 
-Optional<XFA_AttributeValue> CXFA_Node::GetIntactFromKeep(
+absl::optional<XFA_AttributeValue> CXFA_Node::GetIntactFromKeep(
     const CXFA_Keep* pKeep,
     XFA_AttributeValue eLayoutType) const {
-  Optional<XFA_AttributeValue> intact =
+  absl::optional<XFA_AttributeValue> intact =
       pKeep->JSObject()->TryEnum(XFA_Attribute::Intact, false);
   if (!intact.has_value())
-    return {};
+    return absl::nullopt;
 
   if (intact.value() != XFA_AttributeValue::None ||
       eLayoutType != XFA_AttributeValue::Row ||
@@ -2317,10 +2369,10 @@ Optional<XFA_AttributeValue> CXFA_Node::GetIntactFromKeep(
     return intact;
   }
 
-  Optional<XFA_AttributeValue> value =
+  absl::optional<XFA_AttributeValue> value =
       pKeep->JSObject()->TryEnum(XFA_Attribute::Previous, false);
-  if (value && (*value == XFA_AttributeValue::ContentArea ||
-                *value == XFA_AttributeValue::PageArea)) {
+  if (value == XFA_AttributeValue::ContentArea ||
+      value == XFA_AttributeValue::PageArea) {
     return XFA_AttributeValue::ContentArea;
   }
 
@@ -2329,38 +2381,36 @@ Optional<XFA_AttributeValue> CXFA_Node::GetIntactFromKeep(
   if (!pNode)
     return intact;
 
-  Optional<XFA_AttributeValue> ret =
+  absl::optional<XFA_AttributeValue> ret =
       pNode->JSObject()->TryEnum(XFA_Attribute::Next, false);
-  if (!ret)
-    return intact;
-
-  return (*ret == XFA_AttributeValue::ContentArea ||
-          *ret == XFA_AttributeValue::PageArea)
-             ? XFA_AttributeValue::ContentArea
-             : intact;
+  if (ret == XFA_AttributeValue::ContentArea ||
+      ret == XFA_AttributeValue::PageArea) {
+    return XFA_AttributeValue::ContentArea;
+  }
+  return intact;
 }
 
-Optional<float> CXFA_Node::TryWidth() {
+absl::optional<float> CXFA_Node::TryWidth() {
   return JSObject()->TryMeasureAsFloat(XFA_Attribute::W);
 }
 
-Optional<float> CXFA_Node::TryHeight() {
+absl::optional<float> CXFA_Node::TryHeight() {
   return JSObject()->TryMeasureAsFloat(XFA_Attribute::H);
 }
 
-Optional<float> CXFA_Node::TryMinWidth() {
+absl::optional<float> CXFA_Node::TryMinWidth() {
   return JSObject()->TryMeasureAsFloat(XFA_Attribute::MinW);
 }
 
-Optional<float> CXFA_Node::TryMinHeight() {
+absl::optional<float> CXFA_Node::TryMinHeight() {
   return JSObject()->TryMeasureAsFloat(XFA_Attribute::MinH);
 }
 
-Optional<float> CXFA_Node::TryMaxWidth() {
+absl::optional<float> CXFA_Node::TryMaxWidth() {
   return JSObject()->TryMeasureAsFloat(XFA_Attribute::MaxW);
 }
 
-Optional<float> CXFA_Node::TryMaxHeight() {
+absl::optional<float> CXFA_Node::TryMaxHeight() {
   return JSObject()->TryMeasureAsFloat(XFA_Attribute::MaxH);
 }
 
@@ -2440,13 +2490,14 @@ XFA_EventError CXFA_Node::ProcessCalculate(CXFA_FFDocView* pDocView) {
 
   CXFA_EventParam EventParam;
   EventParam.m_eType = XFA_EVENT_Calculate;
+  EventParam.m_bTargeted = false;
   XFA_EventError iRet =
       ExecuteScript(pDocView, calc->GetScriptIfExists(), &EventParam);
   if (iRet != XFA_EventError::kSuccess)
     return iRet;
 
   if (GetRawValue() != EventParam.m_wsResult) {
-    SetValue(XFA_VALUEPICTURE_Raw, EventParam.m_wsResult);
+    SetValue(XFA_ValuePicture::kRaw, EventParam.m_wsResult);
     pDocView->UpdateUIDisplay(this, nullptr);
   }
   return XFA_EventError::kSuccess;
@@ -2454,15 +2505,8 @@ XFA_EventError CXFA_Node::ProcessCalculate(CXFA_FFDocView* pDocView) {
 
 void CXFA_Node::ProcessScriptTestValidate(CXFA_FFDocView* pDocView,
                                           CXFA_Validate* validate,
-                                          XFA_EventError iRet,
-                                          bool bRetValue,
                                           bool bVersionFlag) {
-  if (iRet != XFA_EventError::kSuccess)
-    return;
-  if (bRetValue)
-    return;
-
-  IXFA_AppProvider* pAppProvider =
+  CXFA_FFApp::CallbackIface* pAppProvider =
       pDocView->GetDoc()->GetApp()->GetAppProvider();
   if (!pAppProvider)
     return;
@@ -2485,7 +2529,7 @@ void CXFA_Node::ProcessScriptTestValidate(CXFA_FFDocView* pDocView,
                              static_cast<uint32_t>(AlertIcon::kWarning),
                              static_cast<uint32_t>(AlertButton::kYesNo)) ==
         static_cast<uint32_t>(AlertReturn::kYes)) {
-      SetFlag(XFA_NodeFlag_UserInteractive);
+      SetFlag(XFA_NodeFlag::kUserInteractive);
     }
     return;
   }
@@ -2508,7 +2552,7 @@ XFA_EventError CXFA_Node::ProcessFormatTestValidate(CXFA_FFDocView* pDocView,
   if (wsRawValue.IsEmpty())
     return XFA_EventError::kError;
 
-  LocaleIface* pLocale = GetLocale();
+  GCedLocaleIface* pLocale = GetLocale();
   if (!pLocale)
     return XFA_EventError::kNotExist;
 
@@ -2516,7 +2560,7 @@ XFA_EventError CXFA_Node::ProcessFormatTestValidate(CXFA_FFDocView* pDocView,
   if (lcValue.ValidateValue(lcValue.GetValue(), wsPicture, pLocale, nullptr))
     return XFA_EventError::kSuccess;
 
-  IXFA_AppProvider* pAppProvider =
+  CXFA_FFApp::CallbackIface* pAppProvider =
       pDocView->GetDoc()->GetApp()->GetAppProvider();
   if (!pAppProvider)
     return XFA_EventError::kNotExist;
@@ -2546,7 +2590,7 @@ XFA_EventError CXFA_Node::ProcessFormatTestValidate(CXFA_FFDocView* pDocView,
                            static_cast<uint32_t>(AlertIcon::kWarning),
                            static_cast<uint32_t>(AlertButton::kYesNo)) ==
       static_cast<uint32_t>(AlertReturn::kYes)) {
-    SetFlag(XFA_NodeFlag_UserInteractive);
+    SetFlag(XFA_NodeFlag::kUserInteractive);
   }
 
   return XFA_EventError::kError;
@@ -2556,7 +2600,7 @@ XFA_EventError CXFA_Node::ProcessNullTestValidate(CXFA_FFDocView* pDocView,
                                                   CXFA_Validate* validate,
                                                   int32_t iFlags,
                                                   bool bVersionFlag) {
-  if (!GetValue(XFA_VALUEPICTURE_Raw).IsEmpty())
+  if (!GetValue(XFA_ValuePicture::kRaw).IsEmpty())
     return XFA_EventError::kSuccess;
   if (m_bIsNull && m_bPreNull)
     return XFA_EventError::kSuccess;
@@ -2564,24 +2608,18 @@ XFA_EventError CXFA_Node::ProcessNullTestValidate(CXFA_FFDocView* pDocView,
   XFA_AttributeValue eNullTest = validate->GetNullTest();
   WideString wsNullMsg = validate->GetNullMessageText();
   if (iFlags & 0x01) {
-    XFA_EventError iRet = XFA_EventError::kSuccess;
-    if (eNullTest != XFA_AttributeValue::Disabled)
-      iRet = XFA_EventError::kError;
+    if (eNullTest == XFA_AttributeValue::Disabled)
+      return XFA_EventError::kSuccess;
 
-    if (wsNullMsg.IsEmpty())
-      return iRet;
-
-    if (eNullTest != XFA_AttributeValue::Disabled) {
-      pDocView->m_arrNullTestMsg.push_back(wsNullMsg);
-      return XFA_EventError::kError;
-    }
-    return XFA_EventError::kSuccess;
+    if (!wsNullMsg.IsEmpty())
+      pDocView->AddNullTestMsg(wsNullMsg);
+    return XFA_EventError::kError;
   }
   if (wsNullMsg.IsEmpty() && bVersionFlag &&
       eNullTest != XFA_AttributeValue::Disabled) {
     return XFA_EventError::kError;
   }
-  IXFA_AppProvider* pAppProvider =
+  CXFA_FFApp::CallbackIface* pAppProvider =
       pDocView->GetDoc()->GetApp()->GetAppProvider();
   if (!pAppProvider)
     return XFA_EventError::kNotExist;
@@ -2613,7 +2651,7 @@ XFA_EventError CXFA_Node::ProcessNullTestValidate(CXFA_FFDocView* pDocView,
                                static_cast<uint32_t>(AlertIcon::kWarning),
                                static_cast<uint32_t>(AlertButton::kYesNo)) ==
           static_cast<uint32_t>(AlertReturn::kYes)) {
-        SetFlag(XFA_NodeFlag_UserInteractive);
+        SetFlag(XFA_NodeFlag::kUserInteractive);
       }
       return XFA_EventError::kError;
     }
@@ -2633,8 +2671,10 @@ XFA_EventError CXFA_Node::ProcessValidate(CXFA_FFDocView* pDocView,
   if (!validate)
     return XFA_EventError::kNotExist;
 
-  bool bInitDoc = validate->NeedsInitApp();
-  bool bStatus = pDocView->GetLayoutStatus() < XFA_DOCVIEW_LAYOUTSTATUS_End;
+  const bool bInitDoc = validate->NeedsInitApp();
+  const bool bStatus =
+      pDocView->GetLayoutStatus() != CXFA_FFDocView::LayoutStatus::kEnd;
+
   XFA_EventError iFormat = XFA_EventError::kNotExist;
   XFA_EventError iRet = XFA_EventError::kNotExist;
   CXFA_Script* script = validate->GetScriptIfExists();
@@ -2643,7 +2683,6 @@ XFA_EventError CXFA_Node::ProcessValidate(CXFA_FFDocView* pDocView,
   if (script) {
     CXFA_EventParam eParam;
     eParam.m_eType = XFA_EVENT_Validate;
-    eParam.m_pTarget = this;
     std::tie(iRet, bRet) = ExecuteBoolScript(pDocView, script, &eParam);
   }
 
@@ -2651,7 +2690,7 @@ XFA_EventError CXFA_Node::ProcessValidate(CXFA_FFDocView* pDocView,
   bool bVersionFlag = version < XFA_VERSION_208;
 
   if (bInitDoc) {
-    validate->ClearFlag(XFA_NodeFlag_NeedsInitApp);
+    validate->ClearFlag(XFA_NodeFlag::kNeedsInitApp);
   } else {
     iFormat = ProcessFormatTestValidate(pDocView, validate, bVersionFlag);
     if (!bVersionFlag)
@@ -2660,9 +2699,10 @@ XFA_EventError CXFA_Node::ProcessValidate(CXFA_FFDocView* pDocView,
         &iRet,
         ProcessNullTestValidate(pDocView, validate, iFlags, bVersionFlag));
   }
-  if (iFormat != XFA_EventError::kSuccess && hasBoolResult)
-    ProcessScriptTestValidate(pDocView, validate, iRet, bRet, bVersionFlag);
-
+  if (iRet == XFA_EventError::kSuccess && iFormat != XFA_EventError::kSuccess &&
+      hasBoolResult && !bRet) {
+    ProcessScriptTestValidate(pDocView, validate, bVersionFlag);
+  }
   XFA_EventErrorAccumulate(&iRet, iFormat);
   return iRet;
 }
@@ -2712,7 +2752,7 @@ std::pair<XFA_EventError, bool> CXFA_Node::ExecuteBoolScript(
   if (m_ExecuteRecursionDepth > kMaxExecuteRecursion)
     return {XFA_EventError::kSuccess, false};
 
-  ASSERT(pEventParam);
+  DCHECK(pEventParam);
   if (!script)
     return {XFA_EventError::kNotExist, false};
   if (script->GetRunAt() == XFA_AttributeValue::Server)
@@ -2728,16 +2768,17 @@ std::pair<XFA_EventError, bool> CXFA_Node::ExecuteBoolScript(
 
   CXFA_FFDoc* pDoc = pDocView->GetDoc();
   CFXJSE_Engine* pContext = pDoc->GetXFADoc()->GetScriptContext();
-  pContext->SetEventParam(pEventParam);
+  CFXJSE_Engine::EventParamScope paramScope(
+      pContext, pEventParam->m_bTargeted ? this : nullptr, pEventParam);
   pContext->SetRunAtType(script->GetRunAt());
 
-  std::vector<CXFA_Node*> refNodes;
+  std::vector<cppgc::Persistent<CXFA_Node>> refNodes;
   if (pEventParam->m_eType == XFA_EVENT_InitCalculate ||
       pEventParam->m_eType == XFA_EVENT_Calculate) {
     pContext->SetNodesOfRunScript(&refNodes);
   }
 
-  auto pTmpRetValue = pdfium::MakeUnique<CFXJSE_Value>(pContext->GetIsolate());
+  auto pTmpRetValue = std::make_unique<CFXJSE_Value>();
   bool bRet = false;
   {
     AutoRestorer<uint8_t> restorer(&m_ExecuteRecursionDepth);
@@ -2751,9 +2792,10 @@ std::pair<XFA_EventError, bool> CXFA_Node::ExecuteBoolScript(
     iRet = XFA_EventError::kSuccess;
     if (pEventParam->m_eType == XFA_EVENT_Calculate ||
         pEventParam->m_eType == XFA_EVENT_InitCalculate) {
-      if (!pTmpRetValue->IsUndefined()) {
-        if (!pTmpRetValue->IsNull())
-          pEventParam->m_wsResult = pTmpRetValue->ToWideString();
+      if (!pTmpRetValue->IsUndefined(pContext->GetIsolate())) {
+        if (!pTmpRetValue->IsNull(pContext->GetIsolate()))
+          pEventParam->m_wsResult =
+              pTmpRetValue->ToWideString(pContext->GetIsolate());
 
         iRet = XFA_EventError::kSuccess;
       } else {
@@ -2762,7 +2804,7 @@ std::pair<XFA_EventError, bool> CXFA_Node::ExecuteBoolScript(
       if (pEventParam->m_eType == XFA_EVENT_InitCalculate) {
         if ((iRet == XFA_EventError::kSuccess) &&
             (GetRawValue() != pEventParam->m_wsResult)) {
-          SetValue(XFA_VALUEPICTURE_Raw, pEventParam->m_wsResult);
+          SetValue(XFA_ValuePicture::kRaw, pEventParam->m_wsResult);
           pDocView->AddValidateNode(this);
         }
       }
@@ -2770,32 +2812,28 @@ std::pair<XFA_EventError, bool> CXFA_Node::ExecuteBoolScript(
         if (pRefNode == this)
           continue;
 
-        CXFA_CalcData* pGlobalData = pRefNode->JSObject()->GetCalcData();
-        if (!pGlobalData) {
-          pRefNode->JSObject()->SetCalcData(
-              pdfium::MakeUnique<CXFA_CalcData>());
-          pGlobalData = pRefNode->JSObject()->GetCalcData();
-        }
-        if (!pdfium::ContainsValue(pGlobalData->m_Globals, this))
+        CJX_Object::CalcData* pGlobalData =
+            pRefNode->JSObject()->GetOrCreateCalcData(pDoc->GetHeap());
+        if (!pdfium::Contains(pGlobalData->m_Globals, this))
           pGlobalData->m_Globals.push_back(this);
       }
     }
   }
   pContext->SetNodesOfRunScript(nullptr);
-  pContext->SetEventParam(nullptr);
 
-  return {iRet, pTmpRetValue->IsBoolean() && pTmpRetValue->ToBoolean()};
+  return {iRet, pTmpRetValue->IsBoolean(pContext->GetIsolate()) &&
+                    pTmpRetValue->ToBoolean(pContext->GetIsolate())};
 }
 
 std::pair<XFA_FFWidgetType, CXFA_Ui*>
 CXFA_Node::CreateChildUIAndValueNodesIfNeeded() {
   XFA_Element eType = GetElementType();
-  ASSERT(eType == XFA_Element::Field || eType == XFA_Element::Draw);
+  DCHECK(eType == XFA_Element::Field || eType == XFA_Element::Draw);
 
   // Both Field and Draw have a UI property. We should always be able to
   // retrieve or create the UI element. If we can't something is wrong.
   CXFA_Ui* pUI = JSObject()->GetOrCreateProperty<CXFA_Ui>(0, XFA_Element::Ui);
-  ASSERT(pUI);
+  DCHECK(pUI);
 
   CXFA_Node* pUIChild = nullptr;
   // Search through the children of the UI node to see if we have any of our
@@ -2816,7 +2854,7 @@ CXFA_Node::CreateChildUIAndValueNodesIfNeeded() {
   // reason something has gone really wrong.
   CXFA_Value* value =
       JSObject()->GetOrCreateProperty<CXFA_Value>(0, XFA_Element::Value);
-  ASSERT(value);
+  DCHECK(value);
 
   // The Value nodes only have One-Of children. So, if we have a first child
   // that child must be the type we want to use.
@@ -2858,7 +2896,6 @@ CXFA_Node::CreateChildUIAndValueNodesIfNeeded() {
         widget_type = XFA_FFWidgetType::kRectangle;
         break;
       default:
-        NOTREACHED();
         break;
     }
   }
@@ -2929,7 +2966,7 @@ XFA_Element CXFA_Node::GetValueNodeType() const {
 }
 
 CXFA_Node* CXFA_Node::GetUIChildNode() {
-  ASSERT(HasCreatedUIWidget());
+  DCHECK(HasCreatedUIWidget());
 
   if (ff_widget_type_ != XFA_FFWidgetType::kNone)
     return ui_ ? ui_->GetFirstChild() : nullptr;
@@ -2973,24 +3010,25 @@ CFX_RectF CXFA_Node::GetUIMargin() {
   if (border && border->GetPresence() != XFA_AttributeValue::Visible)
     return CFX_RectF();
 
-  Optional<float> left = mgUI->TryLeftInset();
-  Optional<float> top = mgUI->TryTopInset();
-  Optional<float> right = mgUI->TryRightInset();
-  Optional<float> bottom = mgUI->TryBottomInset();
+  absl::optional<float> left = mgUI->TryLeftInset();
+  absl::optional<float> top = mgUI->TryTopInset();
+  absl::optional<float> right = mgUI->TryRightInset();
+  absl::optional<float> bottom = mgUI->TryBottomInset();
   if (border) {
     bool bVisible = false;
     float fThickness = 0;
     XFA_AttributeValue iType = XFA_AttributeValue::Unknown;
     std::tie(iType, bVisible, fThickness) = border->Get3DStyle();
-    if (!left || !top || !right || !bottom) {
+    if (!left.has_value() || !top.has_value() || !right.has_value() ||
+        !bottom.has_value()) {
       std::vector<CXFA_Stroke*> strokes = border->GetStrokes();
-      if (!top)
+      if (!top.has_value())
         top = GetEdgeThickness(strokes, bVisible, 0);
-      if (!right)
+      if (!right.has_value())
         right = GetEdgeThickness(strokes, bVisible, 1);
-      if (!bottom)
+      if (!bottom.has_value())
         bottom = GetEdgeThickness(strokes, bVisible, 2);
-      if (!left)
+      if (!left.has_value())
         left = GetEdgeThickness(strokes, bVisible, 3);
     }
   }
@@ -3052,8 +3090,8 @@ void CXFA_Node::ResetData() {
           CXFA_Value* defValue = pChild->GetDefaultValueIfExists();
           if (defValue) {
             wsValue = defValue->GetChildValueContent();
-            SetValue(XFA_VALUEPICTURE_Raw, wsValue);
-            pChild->SetValue(XFA_VALUEPICTURE_Raw, wsValue);
+            SetValue(XFA_ValuePicture::kRaw, wsValue);
+            pChild->SetValue(XFA_ValuePicture::kRaw, wsValue);
             done = true;
           }
         }
@@ -3070,7 +3108,7 @@ void CXFA_Node::ResetData() {
                     ->JSObject()
                     ->GetContent(false);
           }
-          pChild->SetValue(XFA_VALUEPICTURE_Raw, itemText);
+          pChild->SetValue(XFA_ValuePicture::kRaw, itemText);
         }
         pNextChild = pChild->GetNextContainerSibling();
       }
@@ -3078,13 +3116,13 @@ void CXFA_Node::ResetData() {
     }
     case XFA_FFWidgetType::kChoiceList:
       ClearAllSelections();
-      FALLTHROUGH;
+      [[fallthrough]];
     default: {
       CXFA_Value* defValue = GetDefaultValueIfExists();
       if (defValue)
         wsValue = defValue->GetChildValueContent();
 
-      SetValue(XFA_VALUEPICTURE_Raw, wsValue);
+      SetValue(XFA_ValuePicture::kRaw, wsValue);
       break;
     }
   }
@@ -3108,11 +3146,10 @@ void CXFA_Node::SetImageEdit(const WideString& wsContentType,
       image->SetTransferEncoding(XFA_AttributeValue::Base64);
     return;
   }
-  pBind->JSObject()->SetCData(XFA_Attribute::ContentType, wsContentType, false,
-                              false);
+  pBind->JSObject()->SetCData(XFA_Attribute::ContentType, wsContentType);
   CXFA_Node* pHrefNode = pBind->GetFirstChild();
   if (pHrefNode) {
-    pHrefNode->JSObject()->SetCData(XFA_Attribute::Value, wsHref, false, false);
+    pHrefNode->JSObject()->SetCData(XFA_Attribute::Value, wsHref);
     return;
   }
   CFX_XMLElement* pElement = ToXMLElement(pBind->GetXMLMappingNode());
@@ -3132,7 +3169,7 @@ void CXFA_Node::CalcCaptionSize(CXFA_FFDoc* doc, CFX_SizeF* pszCap) {
   const bool bVert = iCapPlacement == XFA_AttributeValue::Top ||
                      iCapPlacement == XFA_AttributeValue::Bottom;
   CXFA_TextLayout* pCapTextLayout =
-      m_pLayoutData->AsFieldLayoutData()->m_pCapTextLayout.get();
+      m_pLayoutData->AsFieldLayoutData()->m_pCapTextLayout;
   if (pCapTextLayout) {
     if (!bVert && GetFFWidgetType() != XFA_FFWidgetType::kButton)
       pszCap->width = fCapReserve;
@@ -3220,37 +3257,37 @@ bool CXFA_Node::CalculateWidgetAutoSize(CFX_SizeF* pSize) {
   if (para)
     pSize->width += para->GetMarginLeft() + para->GetTextIndent();
 
-  Optional<float> width = TryWidth();
-  if (width) {
-    pSize->width = *width;
+  absl::optional<float> width = TryWidth();
+  if (width.has_value()) {
+    pSize->width = width.value();
   } else {
-    Optional<float> min = TryMinWidth();
-    if (min)
-      pSize->width = std::max(pSize->width, *min);
+    absl::optional<float> min = TryMinWidth();
+    if (min.has_value())
+      pSize->width = std::max(pSize->width, min.value());
 
-    Optional<float> max = TryMaxWidth();
-    if (max && *max > 0)
-      pSize->width = std::min(pSize->width, *max);
+    absl::optional<float> max = TryMaxWidth();
+    if (max.has_value() && max.value() > 0)
+      pSize->width = std::min(pSize->width, max.value());
   }
 
-  Optional<float> height = TryHeight();
-  if (height) {
-    pSize->height = *height;
+  absl::optional<float> height = TryHeight();
+  if (height.has_value()) {
+    pSize->height = height.value();
   } else {
-    Optional<float> min = TryMinHeight();
-    if (min)
-      pSize->height = std::max(pSize->height, *min);
+    absl::optional<float> min = TryMinHeight();
+    if (min.has_value())
+      pSize->height = std::max(pSize->height, min.value());
 
-    Optional<float> max = TryMaxHeight();
-    if (max && *max > 0)
-      pSize->height = std::min(pSize->height, *max);
+    absl::optional<float> max = TryMaxHeight();
+    if (max.has_value() && max.value() > 0)
+      pSize->height = std::min(pSize->height, max.value());
   }
   return true;
 }
 
 void CXFA_Node::CalculateTextContentSize(CXFA_FFDoc* doc, CFX_SizeF* pSize) {
   float fFontSize = GetFontSize();
-  WideString wsText = GetValue(XFA_VALUEPICTURE_Display);
+  WideString wsText = GetValue(XFA_ValuePicture::kDisplay);
   if (wsText.IsEmpty()) {
     pSize->height += fFontSize;
     return;
@@ -3261,9 +3298,9 @@ void CXFA_Node::CalculateTextContentSize(CXFA_FFDoc* doc, CFX_SizeF* pSize) {
 
   CXFA_FieldLayoutData* layoutData = m_pLayoutData->AsFieldLayoutData();
   if (!layoutData->m_pTextOut) {
-    layoutData->m_pTextOut = pdfium::MakeUnique<CFDE_TextOut>();
+    layoutData->m_pTextOut = std::make_unique<CFDE_TextOut>();
     CFDE_TextOut* pTextOut = layoutData->m_pTextOut.get();
-    pTextOut->SetFont(GetFDEFont(doc));
+    pTextOut->SetFont(GetFGASFont(doc));
     pTextOut->SetFontSize(fFontSize);
     pTextOut->SetLineBreakTolerance(fFontSize * 0.2f);
     pTextOut->SetLineSpace(GetLineHeight());
@@ -3350,17 +3387,17 @@ CFX_SizeF CXFA_Node::CalculateImageSize(float img_width,
                     XFA_UnitPx2Pt(img_height, dpi.height));
 
   CFX_RectF rtFit;
-  Optional<float> width = TryWidth();
-  if (width) {
-    rtFit.width = *width;
+  absl::optional<float> width = TryWidth();
+  if (width.has_value()) {
+    rtFit.width = width.value();
     GetWidthWithoutMargin(rtFit.width);
   } else {
     rtFit.width = rtImage.width;
   }
 
-  Optional<float> height = TryHeight();
-  if (height) {
-    rtFit.height = *height;
+  absl::optional<float> height = TryHeight();
+  if (height.has_value()) {
+    rtFit.height = height.value();
     GetHeightWithoutMargin(rtFit.height);
   } else {
     rtFit.height = rtImage.height;
@@ -3370,53 +3407,52 @@ CFX_SizeF CXFA_Node::CalculateImageSize(float img_width,
 }
 
 bool CXFA_Node::CalculateImageAutoSize(CXFA_FFDoc* doc, CFX_SizeF* pSize) {
-  if (!GetImageImage())
-    LoadImageImage(doc);
+  if (!GetLayoutImage())
+    LoadLayoutImage(doc);
 
   pSize->clear();
-  RetainPtr<CFX_DIBitmap> pBitmap = GetImageImage();
+  RetainPtr<CFX_DIBitmap> pBitmap = GetLayoutImage();
   if (!pBitmap)
     return CalculateWidgetAutoSize(pSize);
 
   *pSize = CalculateImageSize(pBitmap->GetWidth(), pBitmap->GetHeight(),
-                              GetImageDpi());
+                              GetLayoutImageDpi());
   return CalculateWidgetAutoSize(pSize);
 }
 
 bool CXFA_Node::CalculateImageEditAutoSize(CXFA_FFDoc* doc, CFX_SizeF* pSize) {
-  if (!GetImageEditImage())
-    LoadImageEditImage(doc);
+  if (!GetEditImage())
+    LoadEditImage(doc);
 
   pSize->clear();
-  RetainPtr<CFX_DIBitmap> pBitmap = GetImageEditImage();
+  RetainPtr<CFX_DIBitmap> pBitmap = GetEditImage();
   if (!pBitmap)
     return CalculateFieldAutoSize(doc, pSize);
 
   *pSize = CalculateImageSize(pBitmap->GetWidth(), pBitmap->GetHeight(),
-                              GetImageEditDpi());
+                              GetEditImageDpi());
   return CalculateFieldAutoSize(doc, pSize);
 }
 
-bool CXFA_Node::LoadImageImage(CXFA_FFDoc* doc) {
-  InitLayoutData();
+bool CXFA_Node::LoadLayoutImage(CXFA_FFDoc* doc) {
+  InitLayoutData(doc);
   return m_pLayoutData->AsImageLayoutData()->LoadImageData(doc, this);
 }
 
-bool CXFA_Node::LoadImageEditImage(CXFA_FFDoc* doc) {
-  InitLayoutData();
+bool CXFA_Node::LoadEditImage(CXFA_FFDoc* doc) {
+  InitLayoutData(doc);
   return m_pLayoutData->AsFieldLayoutData()->AsImageEditData()->LoadImageData(
       doc, this);
 }
 
-CFX_Size CXFA_Node::GetImageDpi() const {
-  CXFA_ImageLayoutData* pData = m_pLayoutData->AsImageLayoutData();
-  return CFX_Size(pData->m_iImageXDpi, pData->m_iImageYDpi);
+CFX_Size CXFA_Node::GetLayoutImageDpi() const {
+  return m_pLayoutData->AsImageLayoutData()->GetDpi();
 }
 
-CFX_Size CXFA_Node::GetImageEditDpi() const {
+CFX_Size CXFA_Node::GetEditImageDpi() const {
   CXFA_ImageEditData* pData =
       m_pLayoutData->AsFieldLayoutData()->AsImageEditData();
-  return CFX_Size(pData->m_iImageXDpi, pData->m_iImageYDpi);
+  return pData->GetDpi();
 }
 
 float CXFA_Node::CalculateWidgetAutoWidth(float fWidthCalc) {
@@ -3424,13 +3460,13 @@ float CXFA_Node::CalculateWidgetAutoWidth(float fWidthCalc) {
   if (margin)
     fWidthCalc += margin->GetLeftInset() + margin->GetRightInset();
 
-  Optional<float> min = TryMinWidth();
-  if (min)
-    fWidthCalc = std::max(fWidthCalc, *min);
+  absl::optional<float> min = TryMinWidth();
+  if (min.has_value())
+    fWidthCalc = std::max(fWidthCalc, min.value());
 
-  Optional<float> max = TryMaxWidth();
-  if (max && *max > 0)
-    fWidthCalc = std::min(fWidthCalc, *max);
+  absl::optional<float> max = TryMaxWidth();
+  if (max.has_value() && max.value() > 0)
+    fWidthCalc = std::min(fWidthCalc, max.value());
 
   return fWidthCalc;
 }
@@ -3447,13 +3483,13 @@ float CXFA_Node::CalculateWidgetAutoHeight(float fHeightCalc) {
   if (margin)
     fHeightCalc += margin->GetTopInset() + margin->GetBottomInset();
 
-  Optional<float> min = TryMinHeight();
-  if (min)
-    fHeightCalc = std::max(fHeightCalc, *min);
+  absl::optional<float> min = TryMinHeight();
+  if (min.has_value())
+    fHeightCalc = std::max(fHeightCalc, min.value());
 
-  Optional<float> max = TryMaxHeight();
-  if (max && *max > 0)
-    fHeightCalc = std::min(fHeightCalc, *max);
+  absl::optional<float> max = TryMaxHeight();
+  if (max.has_value() && max.value() > 0)
+    fHeightCalc = std::min(fHeightCalc, max.value());
 
   return fHeightCalc;
 }
@@ -3468,42 +3504,40 @@ float CXFA_Node::GetHeightWithoutMargin(float fHeightCalc) const {
 void CXFA_Node::StartWidgetLayout(CXFA_FFDoc* doc,
                                   float* pCalcWidth,
                                   float* pCalcHeight) {
-  InitLayoutData();
+  InitLayoutData(doc);
 
   if (GetFFWidgetType() == XFA_FFWidgetType::kText) {
-    m_pLayoutData->m_fWidgetHeight = TryHeight().value_or(-1);
+    m_pLayoutData->SetWidgetHeight(TryHeight().value_or(-1));
     StartTextLayout(doc, pCalcWidth, pCalcHeight);
     return;
   }
   if (*pCalcWidth > 0 && *pCalcHeight > 0)
     return;
 
-  m_pLayoutData->m_fWidgetHeight = -1;
+  m_pLayoutData->SetWidgetHeight(-1.0f);
   float fWidth = 0;
   if (*pCalcWidth > 0 && *pCalcHeight < 0) {
-    Optional<float> height = TryHeight();
-    if (height) {
-      *pCalcHeight = *height;
+    absl::optional<float> height = TryHeight();
+    if (height.has_value()) {
+      *pCalcHeight = height.value();
     } else {
       CFX_SizeF size = CalculateAccWidthAndHeight(doc, *pCalcWidth);
       *pCalcWidth = size.width;
       *pCalcHeight = size.height;
     }
-
-    m_pLayoutData->m_fWidgetHeight = *pCalcHeight;
+    m_pLayoutData->SetWidgetHeight(*pCalcHeight);
     return;
   }
   if (*pCalcWidth < 0 && *pCalcHeight < 0) {
-    Optional<float> height;
-    Optional<float> width = TryWidth();
-    if (width) {
-      fWidth = *width;
-
+    absl::optional<float> height;
+    absl::optional<float> width = TryWidth();
+    if (width.has_value()) {
+      fWidth = width.value();
       height = TryHeight();
-      if (height)
-        *pCalcHeight = *height;
+      if (height.has_value())
+        *pCalcHeight = height.value();
     }
-    if (!width || !height) {
+    if (!width.has_value() || !height.has_value()) {
       CFX_SizeF size = CalculateAccWidthAndHeight(doc, fWidth);
       *pCalcWidth = size.width;
       *pCalcHeight = size.height;
@@ -3511,11 +3545,11 @@ void CXFA_Node::StartWidgetLayout(CXFA_FFDoc* doc,
       *pCalcWidth = fWidth;
     }
   }
-  m_pLayoutData->m_fWidgetHeight = *pCalcHeight;
+  m_pLayoutData->SetWidgetHeight(*pCalcHeight);
 }
 
 CFX_SizeF CXFA_Node::CalculateAccWidthAndHeight(CXFA_FFDoc* doc, float fWidth) {
-  CFX_SizeF sz(fWidth, m_pLayoutData->m_fWidgetHeight);
+  CFX_SizeF sz(fWidth, m_pLayoutData->GetWidgetHeight());
   switch (GetFFWidgetType()) {
     case XFA_FFWidgetType::kBarcode:
     case XFA_FFWidgetType::kChoiceList:
@@ -3551,16 +3585,18 @@ CFX_SizeF CXFA_Node::CalculateAccWidthAndHeight(CXFA_FFDoc* doc, float fWidth) {
     case XFA_FFWidgetType::kNone:
       break;
   }
-
-  m_pLayoutData->m_fWidgetHeight = sz.height;
+  m_pLayoutData->SetWidgetHeight(sz.height);
   return sz;
 }
 
-Optional<float> CXFA_Node::FindSplitPos(CXFA_FFDocView* pDocView,
-                                        size_t szBlockIndex,
-                                        float fCalcHeight) {
+absl::optional<float> CXFA_Node::FindSplitPos(CXFA_FFDocView* pDocView,
+                                              size_t szBlockIndex,
+                                              float fCalcHeight) {
+  if (!HasCreatedUIWidget())
+    return absl::nullopt;
+
   if (GetFFWidgetType() == XFA_FFWidgetType::kSubform)
-    return pdfium::nullopt;
+    return absl::nullopt;
 
   switch (GetFFWidgetType()) {
     case XFA_FFWidgetType::kText:
@@ -3594,12 +3630,13 @@ Optional<float> CXFA_Node::FindSplitPos(CXFA_FFDocView* pDocView,
     CXFA_TextLayout* pTextLayout =
         m_pLayoutData->AsTextLayoutData()->GetTextLayout();
     fCalcHeight = pTextLayout->DoSplitLayout(
-        szBlockIndex, fCalcHeight, m_pLayoutData->m_fWidgetHeight - fTopInset);
+        szBlockIndex, fCalcHeight,
+        m_pLayoutData->GetWidgetHeight() - fTopInset);
     if (fCalcHeight != 0) {
       if (szBlockIndex == 0)
         fCalcHeight += fTopInset;
       if (fabs(fHeight - fCalcHeight) < kXFAWidgetPrecision)
-        return pdfium::nullopt;
+        return absl::nullopt;
     }
     return fCalcHeight;
   }
@@ -3617,7 +3654,7 @@ Optional<float> CXFA_Node::FindSplitPos(CXFA_FFDocView* pDocView,
       return 0.0f;
     }
     if (iCapPlacement == XFA_AttributeValue::Bottom &&
-        m_pLayoutData->m_fWidgetHeight - fCapReserve - fBottomInset) {
+        m_pLayoutData->GetWidgetHeight() - fCapReserve - fBottomInset) {
       return 0.0f;
     }
     if (iCapPlacement != XFA_AttributeValue::Top)
@@ -3625,8 +3662,8 @@ Optional<float> CXFA_Node::FindSplitPos(CXFA_FFDocView* pDocView,
   }
   CXFA_FieldLayoutData* pFieldData = m_pLayoutData->AsFieldLayoutData();
   int32_t iLinesCount = 0;
-  float fHeight = m_pLayoutData->m_fWidgetHeight;
-  if (GetValue(XFA_VALUEPICTURE_Display).IsEmpty()) {
+  float fHeight = m_pLayoutData->GetWidgetHeight();
+  if (GetValue(XFA_ValuePicture::kDisplay).IsEmpty()) {
     iLinesCount = 1;
   } else {
     if (!pFieldData->m_pTextOut) {
@@ -3640,14 +3677,14 @@ Optional<float> CXFA_Node::FindSplitPos(CXFA_FFDocView* pDocView,
   std::vector<float>* pFieldArray = &pFieldData->m_FieldSplitArray;
   size_t szFieldSplitCount = pFieldArray->size();
   if (szFieldSplitCount < szBlockIndex * 3)
-    return pdfium::nullopt;
+    return absl::nullopt;
 
   for (size_t i = 0; i < szBlockIndex * 3; i += 3) {
-    iLinesCount -= (int32_t)(*pFieldArray)[i + 1];
+    iLinesCount -= static_cast<int32_t>((*pFieldArray)[i + 1]);
     fHeight -= (*pFieldArray)[i + 2];
   }
   if (iLinesCount == 0)
-    return pdfium::nullopt;
+    return absl::nullopt;
 
   float fLineHeight = GetLineHeight();
   float fFontSize = GetFontSize();
@@ -3724,7 +3761,7 @@ Optional<float> CXFA_Node::FindSplitPos(CXFA_FFDocView* pDocView,
       pFieldArray->push_back(0);
       pFieldArray->push_back(fCalcHeight);
     }
-    return pdfium::nullopt;
+    return absl::nullopt;
   }
 
   if (fCalcHeight - fStartOffset < fLineHeight) {
@@ -3741,8 +3778,8 @@ Optional<float> CXFA_Node::FindSplitPos(CXFA_FFDocView* pDocView,
 
   float fTextNum =
       fCalcHeight + kXFAWidgetPrecision - fCapReserve - fStartOffset;
-  int32_t iLineNum =
-      (int32_t)((fTextNum + (fLineHeight - fFontSize)) / fLineHeight);
+  int32_t iLineNum = static_cast<int32_t>(
+      (fTextNum + (fLineHeight - fFontSize)) / fLineHeight);
   if (iLineNum >= iLinesCount) {
     if (fCalcHeight - fStartOffset - fTextHeight >= fFontSize) {
       if (szFieldSplitCount / 3 == (szBlockIndex + 1)) {
@@ -3752,14 +3789,14 @@ Optional<float> CXFA_Node::FindSplitPos(CXFA_FFDocView* pDocView,
         pFieldArray->push_back(iLinesCount);
         pFieldArray->push_back(fCalcHeight);
       }
-      return pdfium::nullopt;
+      return absl::nullopt;
     }
     if (fHeight - fStartOffset - fTextHeight < fFontSize) {
       iLineNum -= 1;
       if (iLineNum == 0)
         return 0.0f;
     } else {
-      iLineNum = (int32_t)(fTextNum / fLineHeight);
+      iLineNum = static_cast<int32_t>(fTextNum / fLineHeight);
     }
   }
   if (iLineNum <= 0)
@@ -3774,41 +3811,47 @@ Optional<float> CXFA_Node::FindSplitPos(CXFA_FFDocView* pDocView,
     pFieldArray->push_back(fSplitHeight);
   }
   if (fabs(fSplitHeight - fCalcHeight) < kXFAWidgetPrecision)
-    return pdfium::nullopt;
+    return absl::nullopt;
   return fSplitHeight;
 }
 
-void CXFA_Node::InitLayoutData() {
+void CXFA_Node::InitLayoutData(CXFA_FFDoc* doc) {
   if (m_pLayoutData)
     return;
 
   switch (GetFFWidgetType()) {
     case XFA_FFWidgetType::kText:
-      m_pLayoutData = pdfium::MakeUnique<CXFA_TextLayoutData>();
+      m_pLayoutData = cppgc::MakeGarbageCollected<CXFA_TextLayoutData>(
+          doc->GetHeap()->GetAllocationHandle());
       return;
     case XFA_FFWidgetType::kTextEdit:
-      m_pLayoutData = pdfium::MakeUnique<CXFA_TextEditData>();
+      m_pLayoutData = cppgc::MakeGarbageCollected<CXFA_TextEditData>(
+          doc->GetHeap()->GetAllocationHandle());
       return;
     case XFA_FFWidgetType::kImage:
-      m_pLayoutData = pdfium::MakeUnique<CXFA_ImageLayoutData>();
+      m_pLayoutData = cppgc::MakeGarbageCollected<CXFA_ImageLayoutData>(
+          doc->GetHeap()->GetAllocationHandle());
       return;
     case XFA_FFWidgetType::kImageEdit:
-      m_pLayoutData = pdfium::MakeUnique<CXFA_ImageEditData>();
+      m_pLayoutData = cppgc::MakeGarbageCollected<CXFA_ImageEditData>(
+          doc->GetHeap()->GetAllocationHandle());
       return;
     default:
       break;
   }
   if (GetElementType() == XFA_Element::Field) {
-    m_pLayoutData = pdfium::MakeUnique<CXFA_FieldLayoutData>();
+    m_pLayoutData = cppgc::MakeGarbageCollected<CXFA_FieldLayoutData>(
+        doc->GetHeap()->GetAllocationHandle());
     return;
   }
-  m_pLayoutData = pdfium::MakeUnique<CXFA_WidgetLayoutData>();
+  m_pLayoutData = cppgc::MakeGarbageCollected<CXFA_WidgetLayoutData>(
+      doc->GetHeap()->GetAllocationHandle());
 }
 
 void CXFA_Node::StartTextLayout(CXFA_FFDoc* doc,
                                 float* pCalcWidth,
                                 float* pCalcHeight) {
-  InitLayoutData();
+  InitLayoutData(doc);
 
   CXFA_TextLayoutData* pTextLayoutData = m_pLayoutData->AsTextLayoutData();
   pTextLayoutData->LoadText(doc, this);
@@ -3828,36 +3871,34 @@ void CXFA_Node::StartTextLayout(CXFA_FFDoc* doc,
     pTextLayout->StartLayout(fWidth);
   }
   if (*pCalcWidth < 0 && *pCalcHeight < 0) {
-    Optional<float> width = TryWidth();
-    if (width) {
-      pTextLayout->StartLayout(GetWidthWithoutMargin(*width));
-      *pCalcWidth = *width;
+    absl::optional<float> width = TryWidth();
+    if (width.has_value()) {
+      pTextLayout->StartLayout(GetWidthWithoutMargin(width.value()));
+      *pCalcWidth = width.value();
     } else {
       float fMaxWidth = CalculateWidgetAutoWidth(pTextLayout->StartLayout(-1));
       pTextLayout->StartLayout(GetWidthWithoutMargin(fMaxWidth));
       *pCalcWidth = fMaxWidth;
     }
   }
-  if (m_pLayoutData->m_fWidgetHeight < 0) {
-    m_pLayoutData->m_fWidgetHeight = pTextLayout->GetLayoutHeight();
-    m_pLayoutData->m_fWidgetHeight =
-        CalculateWidgetAutoHeight(m_pLayoutData->m_fWidgetHeight);
+  if (m_pLayoutData->GetWidgetHeight() < 0) {
+    m_pLayoutData->SetWidgetHeight(
+        CalculateWidgetAutoHeight(pTextLayout->GetLayoutHeight()));
   }
-  fTextHeight = m_pLayoutData->m_fWidgetHeight;
+  fTextHeight = m_pLayoutData->GetWidgetHeight();
   fTextHeight = GetHeightWithoutMargin(fTextHeight);
   pTextLayout->DoLayout(fTextHeight);
-  *pCalcHeight = m_pLayoutData->m_fWidgetHeight;
+  *pCalcHeight = m_pLayoutData->GetWidgetHeight();
 }
 
 bool CXFA_Node::LoadCaption(CXFA_FFDoc* doc) {
-  InitLayoutData();
+  InitLayoutData(doc);
   return m_pLayoutData->AsFieldLayoutData()->LoadCaption(doc, this);
 }
 
 CXFA_TextLayout* CXFA_Node::GetCaptionTextLayout() {
-  return m_pLayoutData
-             ? m_pLayoutData->AsFieldLayoutData()->m_pCapTextLayout.get()
-             : nullptr;
+  return m_pLayoutData ? m_pLayoutData->AsFieldLayoutData()->m_pCapTextLayout
+                       : nullptr;
 }
 
 CXFA_TextLayout* CXFA_Node::GetTextLayout() {
@@ -3865,32 +3906,32 @@ CXFA_TextLayout* CXFA_Node::GetTextLayout() {
                        : nullptr;
 }
 
-RetainPtr<CFX_DIBitmap> CXFA_Node::GetImageImage() {
-  return m_pLayoutData ? m_pLayoutData->AsImageLayoutData()->m_pDIBitmap
+RetainPtr<CFX_DIBitmap> CXFA_Node::GetLayoutImage() {
+  return m_pLayoutData ? m_pLayoutData->AsImageLayoutData()->GetBitmap()
                        : nullptr;
 }
 
-RetainPtr<CFX_DIBitmap> CXFA_Node::GetImageEditImage() {
+RetainPtr<CFX_DIBitmap> CXFA_Node::GetEditImage() {
   return m_pLayoutData ? m_pLayoutData->AsFieldLayoutData()
                              ->AsImageEditData()
-                             ->m_pDIBitmap
+                             ->GetBitmap()
                        : nullptr;
 }
 
-void CXFA_Node::SetImageImage(const RetainPtr<CFX_DIBitmap>& newImage) {
+void CXFA_Node::SetLayoutImage(RetainPtr<CFX_DIBitmap> newImage) {
   CXFA_ImageLayoutData* pData = m_pLayoutData->AsImageLayoutData();
-  if (pData->m_pDIBitmap != newImage)
-    pData->m_pDIBitmap = newImage;
+  if (pData->GetBitmap() != newImage)
+    pData->SetBitmap(std::move(newImage));
 }
 
-void CXFA_Node::SetImageEditImage(const RetainPtr<CFX_DIBitmap>& newImage) {
+void CXFA_Node::SetEditImage(RetainPtr<CFX_DIBitmap> newImage) {
   CXFA_ImageEditData* pData =
       m_pLayoutData->AsFieldLayoutData()->AsImageEditData();
-  if (pData->m_pDIBitmap != newImage)
-    pData->m_pDIBitmap = newImage;
+  if (pData->GetBitmap() != newImage)
+    pData->SetBitmap(std::move(newImage));
 }
 
-RetainPtr<CFGAS_GEFont> CXFA_Node::GetFDEFont(CXFA_FFDoc* doc) {
+RetainPtr<CFGAS_GEFont> CXFA_Node::GetFGASFont(CXFA_FFDoc* doc) {
   WideString wsFontName = L"Courier";
   uint32_t dwFontStyle = 0;
   CXFA_Font* font = GetFontIfExists();
@@ -3902,12 +3943,11 @@ RetainPtr<CFGAS_GEFont> CXFA_Node::GetFDEFont(CXFA_FFDoc* doc) {
 
     wsFontName = font->GetTypeface();
   }
-  return doc->GetApp()->GetXFAFontMgr()->GetFont(doc, wsFontName.AsStringView(),
-                                                 dwFontStyle);
+  return doc->GetApp()->GetXFAFontMgr()->GetFont(doc, wsFontName, dwFontStyle);
 }
 
-bool CXFA_Node::HasButtonRollover() {
-  CXFA_Items* pItems = GetChild<CXFA_Items>(0, XFA_Element::Items, false);
+bool CXFA_Node::HasButtonRollover() const {
+  const auto* pItems = GetChild<CXFA_Items>(0, XFA_Element::Items, false);
   if (!pItems)
     return false;
 
@@ -3922,8 +3962,8 @@ bool CXFA_Node::HasButtonRollover() {
   return false;
 }
 
-bool CXFA_Node::HasButtonDown() {
-  CXFA_Items* pItems = GetChild<CXFA_Items>(0, XFA_Element::Items, false);
+bool CXFA_Node::HasButtonDown() const {
+  const auto* pItems = GetChild<CXFA_Items>(0, XFA_Element::Items, false);
   if (!pItems)
     return false;
 
@@ -3950,29 +3990,30 @@ float CXFA_Node::GetCheckButtonSize() {
   return CXFA_Measurement(10, XFA_Unit::Pt).ToUnit(XFA_Unit::Pt);
 }
 
-XFA_CHECKSTATE CXFA_Node::GetCheckState() {
+XFA_CheckState CXFA_Node::GetCheckState() {
   WideString wsValue = GetRawValue();
   if (wsValue.IsEmpty())
-    return XFA_CHECKSTATE_Off;
+    return XFA_CheckState::kOff;
 
   auto* pItems = GetChild<CXFA_Items>(0, XFA_Element::Items, false);
   if (!pItems)
-    return XFA_CHECKSTATE_Off;
+    return XFA_CheckState::kOff;
 
   CXFA_Node* pText = pItems->GetFirstChild();
   int32_t i = 0;
   while (pText) {
-    Optional<WideString> wsContent = pText->JSObject()->TryContent(false, true);
-    if (wsContent && *wsContent == wsValue)
-      return static_cast<XFA_CHECKSTATE>(i);
+    absl::optional<WideString> wsContent =
+        pText->JSObject()->TryContent(false, true);
+    if (wsContent == wsValue)
+      return static_cast<XFA_CheckState>(i);
 
     i++;
     pText = pText->GetNextSibling();
   }
-  return XFA_CHECKSTATE_Off;
+  return XFA_CheckState::kOff;
 }
 
-void CXFA_Node::SetCheckState(XFA_CHECKSTATE eCheckState, bool bNotify) {
+void CXFA_Node::SetCheckState(XFA_CheckState eCheckState) {
   CXFA_Node* node = GetExclGroupIfExists();
   if (!node) {
     CXFA_Items* pItems = GetChild<CXFA_Items>(0, XFA_Element::Items, false);
@@ -3984,19 +4025,19 @@ void CXFA_Node::SetCheckState(XFA_CHECKSTATE eCheckState, bool bNotify) {
     WideString wsContent;
     while (pText) {
       i++;
-      if (i == eCheckState) {
+      if (i == static_cast<int32_t>(eCheckState)) {
         wsContent = pText->JSObject()->GetContent(false);
         break;
       }
       pText = pText->GetNextSibling();
     }
-    SyncValue(wsContent, bNotify);
+    SyncValue(wsContent, true);
 
     return;
   }
 
   WideString wsValue;
-  if (eCheckState != XFA_CHECKSTATE_Off) {
+  if (eCheckState != XFA_CheckState::kOff) {
     if (CXFA_Items* pItems =
             GetChild<CXFA_Items>(0, XFA_Element::Items, false)) {
       CXFA_Node* pText = pItems->GetFirstChild();
@@ -4027,9 +4068,9 @@ void CXFA_Node::SetCheckState(XFA_CHECKSTATE eCheckState, bool bNotify) {
       else
         wsChildValue.clear();
     }
-    pChild->SyncValue(wsChildValue, bNotify);
+    pChild->SyncValue(wsChildValue, true);
   }
-  node->SyncValue(wsValue, bNotify);
+  node->SyncValue(wsValue, true);
 }
 
 CXFA_Node* CXFA_Node::GetSelectedMember() {
@@ -4040,7 +4081,7 @@ CXFA_Node* CXFA_Node::GetSelectedMember() {
 
   for (CXFA_Node* pNode = ToNode(GetFirstChild()); pNode;
        pNode = pNode->GetNextSibling()) {
-    if (pNode->GetCheckState() == XFA_CHECKSTATE_On) {
+    if (pNode->GetCheckState() == XFA_CheckState::kOn) {
       pSelectedMember = pNode;
       break;
     }
@@ -4048,12 +4089,12 @@ CXFA_Node* CXFA_Node::GetSelectedMember() {
   return pSelectedMember;
 }
 
-CXFA_Node* CXFA_Node::SetSelectedMember(WideStringView wsName, bool bNotify) {
-  uint32_t nameHash = FX_HashCode_GetW(wsName, false);
+CXFA_Node* CXFA_Node::SetSelectedMember(WideStringView wsName) {
+  uint32_t nameHash = FX_HashCode_GetW(wsName);
   for (CXFA_Node* pNode = ToNode(GetFirstChild()); pNode;
        pNode = pNode->GetNextSibling()) {
     if (pNode->GetNameHash() == nameHash) {
-      pNode->SetCheckState(XFA_CHECKSTATE_On, bNotify);
+      pNode->SetCheckState(XFA_CheckState::kOn);
       return pNode;
     }
   }
@@ -4154,7 +4195,7 @@ bool CXFA_Node::IsListBox() {
          attr == XFA_AttributeValue::MultiSelect;
 }
 
-int32_t CXFA_Node::CountChoiceListItems(bool bSaveValue) {
+size_t CXFA_Node::CountChoiceListItems(bool bSaveValue) {
   std::vector<CXFA_Node*> pItems;
   int32_t iCount = 0;
   for (CXFA_Node* pNode = GetFirstChild(); pNode;
@@ -4181,8 +4222,8 @@ int32_t CXFA_Node::CountChoiceListItems(bool bSaveValue) {
   return pItem->CountChildren(XFA_Element::Unknown, false);
 }
 
-Optional<WideString> CXFA_Node::GetChoiceListItem(int32_t nIndex,
-                                                  bool bSaveValue) {
+absl::optional<WideString> CXFA_Node::GetChoiceListItem(int32_t nIndex,
+                                                        bool bSaveValue) {
   std::vector<CXFA_Node*> pItemsArray;
   int32_t iCount = 0;
   for (CXFA_Node* pNode = GetFirstChild(); pNode;
@@ -4196,7 +4237,7 @@ Optional<WideString> CXFA_Node::GetChoiceListItem(int32_t nIndex,
       break;
   }
   if (iCount == 0)
-    return {};
+    return absl::nullopt;
 
   CXFA_Node* pItems = pItemsArray[0];
   if (iCount > 1) {
@@ -4208,13 +4249,14 @@ Optional<WideString> CXFA_Node::GetChoiceListItem(int32_t nIndex,
       pItems = pItemsArray[1];
   }
   if (!pItems)
-    return {};
+    return absl::nullopt;
 
   CXFA_Node* pItem =
       pItems->GetChild<CXFA_Node>(nIndex, XFA_Element::Unknown, false);
-  if (pItem)
-    return {pItem->JSObject()->GetContent(false)};
-  return {};
+  if (!pItem)
+    return absl::nullopt;
+
+  return pItem->JSObject()->GetContent(false);
 }
 
 std::vector<WideString> CXFA_Node::GetChoiceListItems(bool bSaveValue) {
@@ -4248,12 +4290,12 @@ std::vector<WideString> CXFA_Node::GetChoiceListItems(bool bSaveValue) {
 int32_t CXFA_Node::CountSelectedItems() {
   std::vector<WideString> wsValueArray = GetSelectedItemsValue();
   if (IsListBox() || !IsChoiceListAllowTextEntry())
-    return pdfium::CollectionSize<int32_t>(wsValueArray);
+    return fxcrt::CollectionSize<int32_t>(wsValueArray);
 
   int32_t iSelected = 0;
   std::vector<WideString> wsSaveTextArray = GetChoiceListItems(true);
   for (const auto& value : wsValueArray) {
-    if (pdfium::ContainsValue(wsSaveTextArray, value))
+    if (pdfium::Contains(wsSaveTextArray, value))
       iSelected++;
   }
   return iSelected;
@@ -4261,13 +4303,15 @@ int32_t CXFA_Node::CountSelectedItems() {
 
 int32_t CXFA_Node::GetSelectedItem(int32_t nIndex) {
   std::vector<WideString> wsValueArray = GetSelectedItemsValue();
-  if (!pdfium::IndexInBounds(wsValueArray, nIndex))
+  if (!fxcrt::IndexInBounds(wsValueArray, nIndex))
     return -1;
 
   std::vector<WideString> wsSaveTextArray = GetChoiceListItems(true);
   auto it = std::find(wsSaveTextArray.begin(), wsSaveTextArray.end(),
                       wsValueArray[nIndex]);
-  return it != wsSaveTextArray.end() ? it - wsSaveTextArray.begin() : -1;
+  return it != wsSaveTextArray.end()
+             ? pdfium::base::checked_cast<int32_t>(it - wsSaveTextArray.begin())
+             : -1;
 }
 
 std::vector<int32_t> CXFA_Node::GetSelectedItems() {
@@ -4276,8 +4320,10 @@ std::vector<int32_t> CXFA_Node::GetSelectedItems() {
   std::vector<WideString> wsSaveTextArray = GetChoiceListItems(true);
   for (const auto& value : wsValueArray) {
     auto it = std::find(wsSaveTextArray.begin(), wsSaveTextArray.end(), value);
-    if (it != wsSaveTextArray.end())
-      iSelArray.push_back(it - wsSaveTextArray.begin());
+    if (it != wsSaveTextArray.end()) {
+      iSelArray.push_back(
+          pdfium::base::checked_cast<int32_t>(it - wsSaveTextArray.begin()));
+    }
   }
   return iSelArray;
 }
@@ -4294,27 +4340,26 @@ std::vector<WideString> CXFA_Node::GetSelectedItemsValue() {
 
 bool CXFA_Node::GetItemState(int32_t nIndex) {
   std::vector<WideString> wsSaveTextArray = GetChoiceListItems(true);
-  return pdfium::IndexInBounds(wsSaveTextArray, nIndex) &&
-         pdfium::ContainsValue(GetSelectedItemsValue(),
-                               wsSaveTextArray[nIndex]);
+  return fxcrt::IndexInBounds(wsSaveTextArray, nIndex) &&
+         pdfium::Contains(GetSelectedItemsValue(), wsSaveTextArray[nIndex]);
 }
 
 void CXFA_Node::SetItemState(int32_t nIndex,
                              bool bSelected,
                              bool bNotify,
-                             bool bScriptModify,
-                             bool bSyncData) {
+                             bool bScriptModify) {
   std::vector<WideString> wsSaveTextArray = GetChoiceListItems(true);
-  if (!pdfium::IndexInBounds(wsSaveTextArray, nIndex))
+  if (!fxcrt::IndexInBounds(wsSaveTextArray, nIndex))
     return;
 
   int32_t iSel = -1;
   std::vector<WideString> wsValueArray = GetSelectedItemsValue();
   auto value_iter = std::find(wsValueArray.begin(), wsValueArray.end(),
                               wsSaveTextArray[nIndex]);
-  if (value_iter != wsValueArray.end())
-    iSel = value_iter - wsValueArray.begin();
-
+  if (value_iter != wsValueArray.end()) {
+    iSel =
+        pdfium::base::checked_cast<int32_t>(value_iter - wsValueArray.begin());
+  }
   if (IsChoiceListMultiSelect()) {
     if (bSelected) {
       if (iSel < 0) {
@@ -4323,8 +4368,7 @@ void CXFA_Node::SetItemState(int32_t nIndex,
           wsValue += L"\n";
         }
         wsValue += wsSaveTextArray[nIndex];
-        JSObject()->SetContent(wsValue, wsValue, bNotify, bScriptModify,
-                               bSyncData);
+        JSObject()->SetContent(wsValue, wsValue, bNotify, bScriptModify, true);
       }
     } else if (iSel >= 0) {
       std::vector<int32_t> iSelArray = GetSelectedItems();
@@ -4332,18 +4376,18 @@ void CXFA_Node::SetItemState(int32_t nIndex,
           std::find(iSelArray.begin(), iSelArray.end(), nIndex);
       if (selected_iter != iSelArray.end())
         iSelArray.erase(selected_iter);
-      SetSelectedItems(iSelArray, bNotify, bScriptModify, bSyncData);
+      SetSelectedItems(iSelArray, bNotify, bScriptModify, true);
     }
   } else {
     if (bSelected) {
       if (iSel < 0) {
         WideString wsSaveText = wsSaveTextArray[nIndex];
         JSObject()->SetContent(wsSaveText, GetFormatDataValue(wsSaveText),
-                               bNotify, bScriptModify, bSyncData);
+                               bNotify, bScriptModify, true);
       }
     } else if (iSel >= 0) {
       JSObject()->SetContent(WideString(), WideString(), bNotify, bScriptModify,
-                             bSyncData);
+                             true);
     }
   }
 }
@@ -4353,7 +4397,7 @@ void CXFA_Node::SetSelectedItems(const std::vector<int32_t>& iSelArray,
                                  bool bScriptModify,
                                  bool bSyncData) {
   WideString wsValue;
-  int32_t iSize = pdfium::CollectionSize<int32_t>(iSelArray);
+  int32_t iSize = fxcrt::CollectionSize<int32_t>(iSelArray);
   if (iSize >= 1) {
     std::vector<WideString> wsSaveTextArray = GetChoiceListItems(true);
     WideString wsItemValue;
@@ -4533,7 +4577,7 @@ bool CXFA_Node::DeleteItem(int32_t nIndex, bool bNotify, bool bScriptModify) {
       }
     } else {
       if (!bSetValue && pItems->JSObject()->GetBoolean(XFA_Attribute::Save)) {
-        SetItemState(nIndex, false, true, bScriptModify, true);
+        SetItemState(nIndex, false, true, bScriptModify);
         bSetValue = true;
       }
       int32_t i = 0;
@@ -4571,14 +4615,16 @@ bool CXFA_Node::IsVerticalScrollPolicyOff() {
   return false;
 }
 
-Optional<int32_t> CXFA_Node::GetNumberOfCells() {
+absl::optional<int32_t> CXFA_Node::GetNumberOfCells() {
   CXFA_Node* pUIChild = GetUIChildNode();
   if (!pUIChild)
-    return {};
-  if (CXFA_Comb* pNode =
-          pUIChild->GetChild<CXFA_Comb>(0, XFA_Element::Comb, false))
-    return {pNode->JSObject()->GetInteger(XFA_Attribute::NumberOfCells)};
-  return {};
+    return absl::nullopt;
+
+  CXFA_Comb* pNode = pUIChild->GetChild<CXFA_Comb>(0, XFA_Element::Comb, false);
+  if (!pNode)
+    return absl::nullopt;
+
+  return pNode->JSObject()->GetInteger(XFA_Attribute::NumberOfCells);
 }
 
 bool CXFA_Node::IsMultiLine() {
@@ -4586,8 +4632,9 @@ bool CXFA_Node::IsMultiLine() {
   return pUIChild && pUIChild->JSObject()->GetBoolean(XFA_Attribute::MultiLine);
 }
 
-std::pair<XFA_Element, int32_t> CXFA_Node::GetMaxChars() {
-  if (CXFA_Value* pNode = GetChild<CXFA_Value>(0, XFA_Element::Value, false)) {
+std::pair<XFA_Element, int32_t> CXFA_Node::GetMaxChars() const {
+  const auto* pNode = GetChild<CXFA_Value>(0, XFA_Element::Value, false);
+  if (pNode) {
     if (CXFA_Node* pChild = pNode->GetFirstChild()) {
       switch (pChild->GetElementType()) {
         case XFA_Element::Text:
@@ -4606,12 +4653,12 @@ std::pair<XFA_Element, int32_t> CXFA_Node::GetMaxChars() {
   return {XFA_Element::Unknown, 0};
 }
 
-int32_t CXFA_Node::GetFracDigits() {
-  CXFA_Value* pNode = GetChild<CXFA_Value>(0, XFA_Element::Value, false);
+int32_t CXFA_Node::GetFracDigits() const {
+  const auto* pNode = GetChild<CXFA_Value>(0, XFA_Element::Value, false);
   if (!pNode)
     return -1;
 
-  CXFA_Decimal* pChild =
+  const auto* pChild =
       pNode->GetChild<CXFA_Decimal>(0, XFA_Element::Decimal, false);
   if (!pChild)
     return -1;
@@ -4621,12 +4668,12 @@ int32_t CXFA_Node::GetFracDigits() {
       .value_or(-1);
 }
 
-int32_t CXFA_Node::GetLeadDigits() {
-  CXFA_Value* pNode = GetChild<CXFA_Value>(0, XFA_Element::Value, false);
+int32_t CXFA_Node::GetLeadDigits() const {
+  const auto* pNode = GetChild<CXFA_Value>(0, XFA_Element::Value, false);
   if (!pNode)
     return -1;
 
-  CXFA_Decimal* pChild =
+  const auto* pChild =
       pNode->GetChild<CXFA_Decimal>(0, XFA_Element::Decimal, false);
   if (!pChild)
     return -1;
@@ -4636,7 +4683,7 @@ int32_t CXFA_Node::GetLeadDigits() {
       .value_or(-1);
 }
 
-bool CXFA_Node::SetValue(XFA_VALUEPICTURE eValueType,
+bool CXFA_Node::SetValue(XFA_ValuePicture eValueType,
                          const WideString& wsValue) {
   if (wsValue.IsEmpty()) {
     SyncValue(wsValue, true);
@@ -4657,7 +4704,7 @@ bool CXFA_Node::SetValue(XFA_VALUEPICTURE eValueType,
   XFA_Element eType = pNode->GetElementType();
   if (!wsPicture.IsEmpty()) {
     CXFA_LocaleMgr* pLocaleMgr = GetDocument()->GetLocaleMgr();
-    LocaleIface* pLocale = GetLocale();
+    GCedLocaleIface* pLocale = GetLocale();
     CXFA_LocaleValue widgetValue = XFA_GetLocaleValue(this);
     bValidate =
         widgetValue.ValidateValue(wsValue, wsPicture, pLocale, &wsPicture);
@@ -4682,21 +4729,22 @@ bool CXFA_Node::SetValue(XFA_VALUEPICTURE eValueType,
   return bValidate;
 }
 
-WideString CXFA_Node::GetPictureContent(XFA_VALUEPICTURE ePicture) {
-  if (ePicture == XFA_VALUEPICTURE_Raw)
+WideString CXFA_Node::GetPictureContent(XFA_ValuePicture ePicture) {
+  if (ePicture == XFA_ValuePicture::kRaw)
     return WideString();
 
   CXFA_LocaleValue widgetValue = XFA_GetLocaleValue(this);
   switch (ePicture) {
-    case XFA_VALUEPICTURE_Display: {
-      if (CXFA_Format* pFormat =
-              GetChild<CXFA_Format>(0, XFA_Element::Format, false)) {
-        if (CXFA_Picture* pPicture = pFormat->GetChild<CXFA_Picture>(
-                0, XFA_Element::Picture, false)) {
-          Optional<WideString> picture =
+    case XFA_ValuePicture::kDisplay: {
+      auto* pFormat = GetChild<CXFA_Format>(0, XFA_Element::Format, false);
+      if (pFormat) {
+        auto* pPicture =
+            pFormat->GetChild<CXFA_Picture>(0, XFA_Element::Picture, false);
+        if (pPicture) {
+          absl::optional<WideString> picture =
               pPicture->JSObject()->TryContent(false, true);
-          if (picture)
-            return *picture;
+          if (picture.has_value())
+            return picture.value();
         }
       }
 
@@ -4704,31 +4752,34 @@ WideString CXFA_Node::GetPictureContent(XFA_VALUEPICTURE ePicture) {
       if (!pLocale)
         return WideString();
 
-      uint32_t dwType = widgetValue.GetType();
-      switch (dwType) {
-        case XFA_VT_DATE:
-          return pLocale->GetDatePattern(FX_LOCALEDATETIMESUBCATEGORY_Medium);
-        case XFA_VT_TIME:
-          return pLocale->GetTimePattern(FX_LOCALEDATETIMESUBCATEGORY_Medium);
-        case XFA_VT_DATETIME:
-          return pLocale->GetDatePattern(FX_LOCALEDATETIMESUBCATEGORY_Medium) +
+      switch (widgetValue.GetType()) {
+        case CXFA_LocaleValue::ValueType::kDate:
+          return pLocale->GetDatePattern(
+              LocaleIface::DateTimeSubcategory::kMedium);
+        case CXFA_LocaleValue::ValueType::kTime:
+          return pLocale->GetTimePattern(
+              LocaleIface::DateTimeSubcategory::kMedium);
+        case CXFA_LocaleValue::ValueType::kDateTime:
+          return pLocale->GetDatePattern(
+                     LocaleIface::DateTimeSubcategory::kMedium) +
                  L"T" +
-                 pLocale->GetTimePattern(FX_LOCALEDATETIMESUBCATEGORY_Medium);
-        case XFA_VT_DECIMAL:
-        case XFA_VT_FLOAT:
+                 pLocale->GetTimePattern(
+                     LocaleIface::DateTimeSubcategory::kMedium);
+        case CXFA_LocaleValue::ValueType::kDecimal:
+        case CXFA_LocaleValue::ValueType::kFloat:
         default:
           return WideString();
       }
     }
-    case XFA_VALUEPICTURE_Edit: {
+    case XFA_ValuePicture::kEdit: {
       CXFA_Ui* pUI = GetChild<CXFA_Ui>(0, XFA_Element::Ui, false);
       if (pUI) {
         if (CXFA_Picture* pPicture =
                 pUI->GetChild<CXFA_Picture>(0, XFA_Element::Picture, false)) {
-          Optional<WideString> picture =
+          absl::optional<WideString> picture =
               pPicture->JSObject()->TryContent(false, true);
-          if (picture)
-            return *picture;
+          if (picture.has_value())
+            return picture.value();
         }
       }
 
@@ -4736,21 +4787,24 @@ WideString CXFA_Node::GetPictureContent(XFA_VALUEPICTURE ePicture) {
       if (!pLocale)
         return WideString();
 
-      uint32_t dwType = widgetValue.GetType();
-      switch (dwType) {
-        case XFA_VT_DATE:
-          return pLocale->GetDatePattern(FX_LOCALEDATETIMESUBCATEGORY_Short);
-        case XFA_VT_TIME:
-          return pLocale->GetTimePattern(FX_LOCALEDATETIMESUBCATEGORY_Short);
-        case XFA_VT_DATETIME:
-          return pLocale->GetDatePattern(FX_LOCALEDATETIMESUBCATEGORY_Short) +
+      switch (widgetValue.GetType()) {
+        case CXFA_LocaleValue::ValueType::kDate:
+          return pLocale->GetDatePattern(
+              LocaleIface::DateTimeSubcategory::kShort);
+        case CXFA_LocaleValue::ValueType::kTime:
+          return pLocale->GetTimePattern(
+              LocaleIface::DateTimeSubcategory::kShort);
+        case CXFA_LocaleValue::ValueType::kDateTime:
+          return pLocale->GetDatePattern(
+                     LocaleIface::DateTimeSubcategory::kShort) +
                  L"T" +
-                 pLocale->GetTimePattern(FX_LOCALEDATETIMESUBCATEGORY_Short);
+                 pLocale->GetTimePattern(
+                     LocaleIface::DateTimeSubcategory::kShort);
         default:
           return WideString();
       }
     }
-    case XFA_VALUEPICTURE_DataBind: {
+    case XFA_ValuePicture::kDataBind: {
       CXFA_Bind* bind = GetBindIfExists();
       if (bind)
         return bind->GetPicture();
@@ -4762,10 +4816,10 @@ WideString CXFA_Node::GetPictureContent(XFA_VALUEPICTURE ePicture) {
   return WideString();
 }
 
-WideString CXFA_Node::GetValue(XFA_VALUEPICTURE eValueType) {
+WideString CXFA_Node::GetValue(XFA_ValuePicture eValueType) {
   WideString wsValue = JSObject()->GetContent(false);
 
-  if (eValueType == XFA_VALUEPICTURE_Display)
+  if (eValueType == XFA_ValuePicture::kDisplay)
     wsValue = GetItemLabel(wsValue.AsStringView());
 
   WideString wsPicture = GetPictureContent(eValueType);
@@ -4775,7 +4829,7 @@ WideString CXFA_Node::GetValue(XFA_VALUEPICTURE eValueType) {
 
   switch (pNode->GetElementType()) {
     case XFA_Element::ChoiceList: {
-      if (eValueType == XFA_VALUEPICTURE_Display) {
+      if (eValueType == XFA_ValuePicture::kDisplay) {
         int32_t iSelItemIndex = GetSelectedItem(0);
         if (iSelItemIndex >= 0) {
           wsValue =
@@ -4786,9 +4840,9 @@ WideString CXFA_Node::GetValue(XFA_VALUEPICTURE eValueType) {
       break;
     }
     case XFA_Element::NumericEdit:
-      if (eValueType != XFA_VALUEPICTURE_Raw && wsPicture.IsEmpty()) {
+      if (eValueType != XFA_ValuePicture::kRaw && wsPicture.IsEmpty()) {
         LocaleIface* pLocale = GetLocale();
-        if (eValueType == XFA_VALUEPICTURE_Display && pLocale)
+        if (eValueType == XFA_ValuePicture::kDisplay && pLocale)
           wsValue = FormatNumStr(NormalizeNumStr(wsValue), pLocale);
       }
       break;
@@ -4798,23 +4852,26 @@ WideString CXFA_Node::GetValue(XFA_VALUEPICTURE eValueType) {
   if (wsPicture.IsEmpty())
     return wsValue;
 
-  if (LocaleIface* pLocale = GetLocale()) {
+  GCedLocaleIface* pLocale = GetLocale();
+  if (pLocale) {
     CXFA_LocaleValue widgetValue = XFA_GetLocaleValue(this);
     CXFA_LocaleMgr* pLocaleMgr = GetDocument()->GetLocaleMgr();
     switch (widgetValue.GetType()) {
-      case XFA_VT_DATE: {
+      case CXFA_LocaleValue::ValueType::kDate: {
         WideString wsDate, wsTime;
         if (SplitDateTime(wsValue, wsDate, wsTime)) {
-          CXFA_LocaleValue date(XFA_VT_DATE, wsDate, pLocaleMgr);
+          CXFA_LocaleValue date(CXFA_LocaleValue::ValueType::kDate, wsDate,
+                                pLocaleMgr);
           if (date.FormatPatterns(wsValue, wsPicture, pLocale, eValueType))
             return wsValue;
         }
         break;
       }
-      case XFA_VT_TIME: {
+      case CXFA_LocaleValue::ValueType::kTime: {
         WideString wsDate, wsTime;
         if (SplitDateTime(wsValue, wsDate, wsTime)) {
-          CXFA_LocaleValue time(XFA_VT_TIME, wsTime, pLocaleMgr);
+          CXFA_LocaleValue time(CXFA_LocaleValue::ValueType::kTime, wsTime,
+                                pLocaleMgr);
           if (time.FormatPatterns(wsValue, wsPicture, pLocale, eValueType))
             return wsValue;
         }
@@ -4832,12 +4889,12 @@ WideString CXFA_Node::GetNormalizeDataValue(const WideString& wsValue) {
   if (wsValue.IsEmpty())
     return WideString();
 
-  WideString wsPicture = GetPictureContent(XFA_VALUEPICTURE_DataBind);
+  WideString wsPicture = GetPictureContent(XFA_ValuePicture::kDataBind);
   if (wsPicture.IsEmpty())
     return wsValue;
 
   CXFA_LocaleMgr* pLocaleMgr = GetDocument()->GetLocaleMgr();
-  LocaleIface* pLocale = GetLocale();
+  GCedLocaleIface* pLocale = GetLocale();
   CXFA_LocaleValue widgetValue = XFA_GetLocaleValue(this);
   if (widgetValue.ValidateValue(wsValue, wsPicture, pLocale, &wsPicture)) {
     widgetValue = CXFA_LocaleValue(widgetValue.GetType(), wsValue, wsPicture,
@@ -4851,12 +4908,13 @@ WideString CXFA_Node::GetFormatDataValue(const WideString& wsValue) {
   if (wsValue.IsEmpty())
     return WideString();
 
-  WideString wsPicture = GetPictureContent(XFA_VALUEPICTURE_DataBind);
+  WideString wsPicture = GetPictureContent(XFA_ValuePicture::kDataBind);
   if (wsPicture.IsEmpty())
     return wsValue;
 
   WideString wsFormattedValue = wsValue;
-  if (LocaleIface* pLocale = GetLocale()) {
+  GCedLocaleIface* pLocale = GetLocale();
+  if (pLocale) {
     CXFA_Value* pNodeValue = GetChild<CXFA_Value>(0, XFA_Element::Value, false);
     if (!pNodeValue)
       return wsValue;
@@ -4865,56 +4923,30 @@ WideString CXFA_Node::GetFormatDataValue(const WideString& wsValue) {
     if (!pValueChild)
       return wsValue;
 
-    int32_t iVTType = XFA_VT_NULL;
-    switch (pValueChild->GetElementType()) {
-      case XFA_Element::Decimal:
-        iVTType = XFA_VT_DECIMAL;
-        break;
-      case XFA_Element::Float:
-        iVTType = XFA_VT_FLOAT;
-        break;
-      case XFA_Element::Date:
-        iVTType = XFA_VT_DATE;
-        break;
-      case XFA_Element::Time:
-        iVTType = XFA_VT_TIME;
-        break;
-      case XFA_Element::DateTime:
-        iVTType = XFA_VT_DATETIME;
-        break;
-      case XFA_Element::Boolean:
-        iVTType = XFA_VT_BOOLEAN;
-        break;
-      case XFA_Element::Integer:
-        iVTType = XFA_VT_INTEGER;
-        break;
-      case XFA_Element::Text:
-        iVTType = XFA_VT_TEXT;
-        break;
-      default:
-        iVTType = XFA_VT_NULL;
-        break;
-    }
+    CXFA_LocaleValue::ValueType iVTType =
+        XFA_GetLocaleValueType(pValueChild->GetElementType());
     CXFA_LocaleMgr* pLocaleMgr = GetDocument()->GetLocaleMgr();
     CXFA_LocaleValue widgetValue(iVTType, wsValue, pLocaleMgr);
     switch (widgetValue.GetType()) {
-      case XFA_VT_DATE: {
+      case CXFA_LocaleValue::ValueType::kDate: {
         WideString wsDate, wsTime;
         if (SplitDateTime(wsValue, wsDate, wsTime)) {
-          CXFA_LocaleValue date(XFA_VT_DATE, wsDate, pLocaleMgr);
+          CXFA_LocaleValue date(CXFA_LocaleValue::ValueType::kDate, wsDate,
+                                pLocaleMgr);
           if (date.FormatPatterns(wsFormattedValue, wsPicture, pLocale,
-                                  XFA_VALUEPICTURE_DataBind)) {
+                                  XFA_ValuePicture::kDataBind)) {
             return wsFormattedValue;
           }
         }
         break;
       }
-      case XFA_VT_TIME: {
+      case CXFA_LocaleValue::ValueType::kTime: {
         WideString wsDate, wsTime;
         if (SplitDateTime(wsValue, wsDate, wsTime)) {
-          CXFA_LocaleValue time(XFA_VT_TIME, wsTime, pLocaleMgr);
+          CXFA_LocaleValue time(CXFA_LocaleValue::ValueType::kTime, wsTime,
+                                pLocaleMgr);
           if (time.FormatPatterns(wsFormattedValue, wsPicture, pLocale,
-                                  XFA_VALUEPICTURE_DataBind)) {
+                                  XFA_ValuePicture::kDataBind)) {
             return wsFormattedValue;
           }
         }
@@ -4924,7 +4956,7 @@ WideString CXFA_Node::GetFormatDataValue(const WideString& wsValue) {
         break;
     }
     widgetValue.FormatPatterns(wsFormattedValue, wsPicture, pLocale,
-                               XFA_VALUEPICTURE_DataBind);
+                               XFA_ValuePicture::kDataBind);
   }
   return wsFormattedValue;
 }
@@ -4957,31 +4989,32 @@ void CXFA_Node::InsertListTextItem(CXFA_Node* pItems,
 WideString CXFA_Node::NumericLimit(const WideString& wsValue) {
   int32_t iLead = GetLeadDigits();
   int32_t iTread = GetFracDigits();
-
-  if ((iLead == -1) && (iTread == -1))
+  if (iLead == -1 && iTread == -1)
     return wsValue;
 
-  WideString wsRet;
-  int32_t iLead_ = 0, iTread_ = -1;
-  int32_t iCount = wsValue.GetLength();
+  int32_t iCount = pdfium::base::checked_cast<int32_t>(wsValue.GetLength());
   if (iCount == 0)
     return wsValue;
 
+  WideString wsRet;
   int32_t i = 0;
   if (wsValue[i] == L'-') {
     wsRet += L'-';
     i++;
   }
+
+  int32_t iLead2 = 0;
+  int32_t iTread2 = -1;
   for (; i < iCount; i++) {
     wchar_t wc = wsValue[i];
     if (FXSYS_IsDecimalDigit(wc)) {
       if (iLead >= 0) {
-        iLead_++;
-        if (iLead_ > iLead)
+        iLead2++;
+        if (iLead2 > iLead)
           return L"0";
-      } else if (iTread_ >= 0) {
-        iTread_++;
-        if (iTread_ > iTread) {
+      } else if (iTread2 >= 0) {
+        iTread2++;
+        if (iTread2 > iTread) {
           if (iTread != -1) {
             CFGAS_Decimal wsDeci = CFGAS_Decimal(wsValue.AsStringView());
             wsDeci.SetScale(iTread);
@@ -4991,7 +5024,7 @@ WideString CXFA_Node::NumericLimit(const WideString& wsValue) {
         }
       }
     } else if (wc == L'.') {
-      iTread_ = 0;
+      iTread2 = 0;
       iLead = -1;
     }
     wsRet += wc;
@@ -5027,7 +5060,7 @@ void CXFA_Node::SetNodeAndDescendantsUnused() {
   CXFA_NodeIterator sIterator(this);
   for (CXFA_Node* pNode = sIterator.GetCurrent(); pNode;
        pNode = sIterator.MoveToNext()) {
-    pNode->SetFlag(XFA_NodeFlag_UnusedNode);
+    pNode->SetFlag(XFA_NodeFlag::kUnusedNode);
   }
 }
 
@@ -5081,926 +5114,1248 @@ CXFA_Node* CXFA_Node::GetTransparentParent() {
 }
 
 CFX_XMLDocument* CXFA_Node::GetXMLDocument() const {
-  return GetDocument()->GetNotify()->GetHDOC()->GetXMLDocument();
+  return GetDocument()->GetNotify()->GetFFDoc()->GetXMLDocument();
 }
 
 // static
-std::unique_ptr<CXFA_Node> CXFA_Node::Create(CXFA_Document* doc,
-                                             XFA_Element element,
-                                             XFA_PacketType packet) {
-  std::unique_ptr<CXFA_Node> node;
+CXFA_Node* CXFA_Node::Create(CXFA_Document* doc,
+                             XFA_Element element,
+                             XFA_PacketType packet) {
+  CXFA_Node* node = nullptr;
   switch (element) {
     case XFA_Element::Ps:
-      node = pdfium::MakeUnique<CXFA_Ps>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Ps>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::To:
-      node = pdfium::MakeUnique<CXFA_To>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_To>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Ui:
-      node = pdfium::MakeUnique<CXFA_Ui>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Ui>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::RecordSet:
-      node = pdfium::MakeUnique<CXFA_RecordSet>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_RecordSet>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SubsetBelow:
-      node = pdfium::MakeUnique<CXFA_SubsetBelow>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SubsetBelow>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SubformSet:
-      node = pdfium::MakeUnique<CXFA_SubformSet>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SubformSet>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::AdobeExtensionLevel:
-      node = pdfium::MakeUnique<CXFA_AdobeExtensionLevel>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_AdobeExtensionLevel>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Typeface:
-      node = pdfium::MakeUnique<CXFA_Typeface>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Typeface>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Break:
-      node = pdfium::MakeUnique<CXFA_Break>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Break>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::FontInfo:
-      node = pdfium::MakeUnique<CXFA_FontInfo>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_FontInfo>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::NumberPattern:
-      node = pdfium::MakeUnique<CXFA_NumberPattern>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_NumberPattern>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DynamicRender:
-      node = pdfium::MakeUnique<CXFA_DynamicRender>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DynamicRender>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::PrintScaling:
-      node = pdfium::MakeUnique<CXFA_PrintScaling>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_PrintScaling>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::CheckButton:
-      node = pdfium::MakeUnique<CXFA_CheckButton>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_CheckButton>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DatePatterns:
-      node = pdfium::MakeUnique<CXFA_DatePatterns>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DatePatterns>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SourceSet:
-      node = pdfium::MakeUnique<CXFA_SourceSet>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SourceSet>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Amd:
-      node = pdfium::MakeUnique<CXFA_Amd>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Amd>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Arc:
-      node = pdfium::MakeUnique<CXFA_Arc>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Arc>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Day:
-      node = pdfium::MakeUnique<CXFA_Day>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Day>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Era:
-      node = pdfium::MakeUnique<CXFA_Era>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Era>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Jog:
-      node = pdfium::MakeUnique<CXFA_Jog>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Jog>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Log:
-      node = pdfium::MakeUnique<CXFA_Log>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Log>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Map:
-      node = pdfium::MakeUnique<CXFA_Map>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Map>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Mdp:
-      node = pdfium::MakeUnique<CXFA_Mdp>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Mdp>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::BreakBefore:
-      node = pdfium::MakeUnique<CXFA_BreakBefore>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_BreakBefore>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Oid:
-      node = pdfium::MakeUnique<CXFA_Oid>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Oid>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Pcl:
-      node = pdfium::MakeUnique<CXFA_Pcl>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Pcl>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Pdf:
-      node = pdfium::MakeUnique<CXFA_Pdf>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Pdf>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Ref:
-      node = pdfium::MakeUnique<CXFA_Ref>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Ref>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Uri:
-      node = pdfium::MakeUnique<CXFA_Uri>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Uri>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Xdc:
-      node = pdfium::MakeUnique<CXFA_Xdc>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Xdc>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Xdp:
-      node = pdfium::MakeUnique<CXFA_Xdp>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Xdp>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Xfa:
-      node = pdfium::MakeUnique<CXFA_Xfa>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Xfa>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Xsl:
-      node = pdfium::MakeUnique<CXFA_Xsl>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Xsl>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Zpl:
-      node = pdfium::MakeUnique<CXFA_Zpl>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Zpl>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Cache:
-      node = pdfium::MakeUnique<CXFA_Cache>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Cache>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Margin:
-      node = pdfium::MakeUnique<CXFA_Margin>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Margin>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::KeyUsage:
-      node = pdfium::MakeUnique<CXFA_KeyUsage>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_KeyUsage>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Exclude:
-      node = pdfium::MakeUnique<CXFA_Exclude>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Exclude>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ChoiceList:
-      node = pdfium::MakeUnique<CXFA_ChoiceList>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ChoiceList>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Level:
-      node = pdfium::MakeUnique<CXFA_Level>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Level>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::LabelPrinter:
-      node = pdfium::MakeUnique<CXFA_LabelPrinter>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_LabelPrinter>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::CalendarSymbols:
-      node = pdfium::MakeUnique<CXFA_CalendarSymbols>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_CalendarSymbols>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Para:
-      node = pdfium::MakeUnique<CXFA_Para>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Para>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Part:
-      node = pdfium::MakeUnique<CXFA_Part>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Part>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Pdfa:
-      node = pdfium::MakeUnique<CXFA_Pdfa>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Pdfa>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Filter:
-      node = pdfium::MakeUnique<CXFA_Filter>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Filter>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Present:
-      node = pdfium::MakeUnique<CXFA_Present>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Present>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Pagination:
-      node = pdfium::MakeUnique<CXFA_Pagination>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Pagination>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Encoding:
-      node = pdfium::MakeUnique<CXFA_Encoding>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Encoding>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Event:
-      node = pdfium::MakeUnique<CXFA_Event>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Event>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Whitespace:
-      node = pdfium::MakeUnique<CXFA_Whitespace>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Whitespace>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DefaultUi:
-      node = pdfium::MakeUnique<CXFA_DefaultUi>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DefaultUi>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DataModel:
-      node = pdfium::MakeUnique<CXFA_DataModel>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DataModel>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Barcode:
-      node = pdfium::MakeUnique<CXFA_Barcode>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Barcode>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::TimePattern:
-      node = pdfium::MakeUnique<CXFA_TimePattern>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_TimePattern>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::BatchOutput:
-      node = pdfium::MakeUnique<CXFA_BatchOutput>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_BatchOutput>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Enforce:
-      node = pdfium::MakeUnique<CXFA_Enforce>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Enforce>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::CurrencySymbols:
-      node = pdfium::MakeUnique<CXFA_CurrencySymbols>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_CurrencySymbols>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::AddSilentPrint:
-      node = pdfium::MakeUnique<CXFA_AddSilentPrint>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_AddSilentPrint>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Rename:
-      node = pdfium::MakeUnique<CXFA_Rename>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Rename>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Operation:
-      node = pdfium::MakeUnique<CXFA_Operation>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Operation>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Typefaces:
-      node = pdfium::MakeUnique<CXFA_Typefaces>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Typefaces>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SubjectDNs:
-      node = pdfium::MakeUnique<CXFA_SubjectDNs>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SubjectDNs>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Issuers:
-      node = pdfium::MakeUnique<CXFA_Issuers>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Issuers>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::WsdlConnection:
-      node = pdfium::MakeUnique<CXFA_WsdlConnection>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_WsdlConnection>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Debug:
-      node = pdfium::MakeUnique<CXFA_Debug>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Debug>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Delta:
-      node = pdfium::MakeUnique<CXFA_Delta>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Delta>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::EraNames:
-      node = pdfium::MakeUnique<CXFA_EraNames>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_EraNames>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ModifyAnnots:
-      node = pdfium::MakeUnique<CXFA_ModifyAnnots>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ModifyAnnots>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::StartNode:
-      node = pdfium::MakeUnique<CXFA_StartNode>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_StartNode>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Button:
-      node = pdfium::MakeUnique<CXFA_Button>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Button>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Format:
-      node = pdfium::MakeUnique<CXFA_Format>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Format>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Border:
-      node = pdfium::MakeUnique<CXFA_Border>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Border>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Area:
-      node = pdfium::MakeUnique<CXFA_Area>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Area>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Hyphenation:
-      node = pdfium::MakeUnique<CXFA_Hyphenation>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Hyphenation>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Text:
-      node = pdfium::MakeUnique<CXFA_Text>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Text>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Time:
-      node = pdfium::MakeUnique<CXFA_Time>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Time>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Type:
-      node = pdfium::MakeUnique<CXFA_Type>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Type>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Overprint:
-      node = pdfium::MakeUnique<CXFA_Overprint>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Overprint>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Certificates:
-      node = pdfium::MakeUnique<CXFA_Certificates>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Certificates>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::EncryptionMethods:
-      node = pdfium::MakeUnique<CXFA_EncryptionMethods>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_EncryptionMethods>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SetProperty:
-      node = pdfium::MakeUnique<CXFA_SetProperty>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SetProperty>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::PrinterName:
-      node = pdfium::MakeUnique<CXFA_PrinterName>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_PrinterName>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::StartPage:
-      node = pdfium::MakeUnique<CXFA_StartPage>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_StartPage>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::PageOffset:
-      node = pdfium::MakeUnique<CXFA_PageOffset>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_PageOffset>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DateTime:
-      node = pdfium::MakeUnique<CXFA_DateTime>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DateTime>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Comb:
-      node = pdfium::MakeUnique<CXFA_Comb>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Comb>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Pattern:
-      node = pdfium::MakeUnique<CXFA_Pattern>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Pattern>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::IfEmpty:
-      node = pdfium::MakeUnique<CXFA_IfEmpty>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_IfEmpty>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SuppressBanner:
-      node = pdfium::MakeUnique<CXFA_SuppressBanner>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SuppressBanner>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::OutputBin:
-      node = pdfium::MakeUnique<CXFA_OutputBin>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_OutputBin>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Field:
-      node = pdfium::MakeUnique<CXFA_Field>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Field>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Agent:
-      node = pdfium::MakeUnique<CXFA_Agent>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Agent>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::OutputXSL:
-      node = pdfium::MakeUnique<CXFA_OutputXSL>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_OutputXSL>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::AdjustData:
-      node = pdfium::MakeUnique<CXFA_AdjustData>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_AdjustData>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::AutoSave:
-      node = pdfium::MakeUnique<CXFA_AutoSave>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_AutoSave>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ContentArea:
-      node = pdfium::MakeUnique<CXFA_ContentArea>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ContentArea>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::WsdlAddress:
-      node = pdfium::MakeUnique<CXFA_WsdlAddress>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_WsdlAddress>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Solid:
-      node = pdfium::MakeUnique<CXFA_Solid>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Solid>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DateTimeSymbols:
-      node = pdfium::MakeUnique<CXFA_DateTimeSymbols>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DateTimeSymbols>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::EncryptionLevel:
-      node = pdfium::MakeUnique<CXFA_EncryptionLevel>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_EncryptionLevel>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Edge:
-      node = pdfium::MakeUnique<CXFA_Edge>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Edge>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Stipple:
-      node = pdfium::MakeUnique<CXFA_Stipple>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Stipple>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Attributes:
-      node = pdfium::MakeUnique<CXFA_Attributes>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Attributes>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::VersionControl:
-      node = pdfium::MakeUnique<CXFA_VersionControl>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_VersionControl>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Meridiem:
-      node = pdfium::MakeUnique<CXFA_Meridiem>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Meridiem>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ExclGroup:
-      node = pdfium::MakeUnique<CXFA_ExclGroup>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ExclGroup>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ToolTip:
-      node = pdfium::MakeUnique<CXFA_ToolTip>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ToolTip>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Compress:
-      node = pdfium::MakeUnique<CXFA_Compress>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Compress>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Reason:
-      node = pdfium::MakeUnique<CXFA_Reason>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Reason>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Execute:
-      node = pdfium::MakeUnique<CXFA_Execute>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Execute>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ContentCopy:
-      node = pdfium::MakeUnique<CXFA_ContentCopy>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ContentCopy>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DateTimeEdit:
-      node = pdfium::MakeUnique<CXFA_DateTimeEdit>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DateTimeEdit>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Config:
-      node = pdfium::MakeUnique<CXFA_Config>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Config>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Image:
-      node = pdfium::MakeUnique<CXFA_Image>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Image>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SharpxHTML:
-      node = pdfium::MakeUnique<CXFA_SharpxHTML>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SharpxHTML>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::NumberOfCopies:
-      node = pdfium::MakeUnique<CXFA_NumberOfCopies>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_NumberOfCopies>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::BehaviorOverride:
-      node = pdfium::MakeUnique<CXFA_BehaviorOverride>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_BehaviorOverride>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::TimeStamp:
-      node = pdfium::MakeUnique<CXFA_TimeStamp>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_TimeStamp>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Month:
-      node = pdfium::MakeUnique<CXFA_Month>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Month>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ViewerPreferences:
-      node = pdfium::MakeUnique<CXFA_ViewerPreferences>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ViewerPreferences>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ScriptModel:
-      node = pdfium::MakeUnique<CXFA_ScriptModel>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ScriptModel>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Decimal:
-      node = pdfium::MakeUnique<CXFA_Decimal>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Decimal>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Subform:
-      node = pdfium::MakeUnique<CXFA_Subform>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Subform>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Select:
-      node = pdfium::MakeUnique<CXFA_Select>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Select>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Window:
-      node = pdfium::MakeUnique<CXFA_Window>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Window>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::LocaleSet:
-      node = pdfium::MakeUnique<CXFA_LocaleSet>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_LocaleSet>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Handler:
-      node = pdfium::MakeUnique<CXFA_Handler>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Handler>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Presence:
-      node = pdfium::MakeUnique<CXFA_Presence>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Presence>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Record:
-      node = pdfium::MakeUnique<CXFA_Record>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Record>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Embed:
-      node = pdfium::MakeUnique<CXFA_Embed>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Embed>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Version:
-      node = pdfium::MakeUnique<CXFA_Version>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Version>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Command:
-      node = pdfium::MakeUnique<CXFA_Command>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Command>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Copies:
-      node = pdfium::MakeUnique<CXFA_Copies>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Copies>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Staple:
-      node = pdfium::MakeUnique<CXFA_Staple>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Staple>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SubmitFormat:
-      node = pdfium::MakeUnique<CXFA_SubmitFormat>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SubmitFormat>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Boolean:
-      node = pdfium::MakeUnique<CXFA_Boolean>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Boolean>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Message:
-      node = pdfium::MakeUnique<CXFA_Message>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Message>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Output:
-      node = pdfium::MakeUnique<CXFA_Output>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Output>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::PsMap:
-      node = pdfium::MakeUnique<CXFA_PsMap>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_PsMap>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ExcludeNS:
-      node = pdfium::MakeUnique<CXFA_ExcludeNS>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ExcludeNS>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Assist:
-      node = pdfium::MakeUnique<CXFA_Assist>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Assist>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Picture:
-      node = pdfium::MakeUnique<CXFA_Picture>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Picture>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Traversal:
-      node = pdfium::MakeUnique<CXFA_Traversal>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Traversal>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SilentPrint:
-      node = pdfium::MakeUnique<CXFA_SilentPrint>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SilentPrint>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::WebClient:
-      node = pdfium::MakeUnique<CXFA_WebClient>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_WebClient>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Producer:
-      node = pdfium::MakeUnique<CXFA_Producer>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Producer>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Corner:
-      node = pdfium::MakeUnique<CXFA_Corner>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Corner>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::MsgId:
-      node = pdfium::MakeUnique<CXFA_MsgId>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_MsgId>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Color:
-      node = pdfium::MakeUnique<CXFA_Color>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Color>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Keep:
-      node = pdfium::MakeUnique<CXFA_Keep>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Keep>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Query:
-      node = pdfium::MakeUnique<CXFA_Query>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Query>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Insert:
-      node = pdfium::MakeUnique<CXFA_Insert>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Insert>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ImageEdit:
-      node = pdfium::MakeUnique<CXFA_ImageEdit>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ImageEdit>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Validate:
-      node = pdfium::MakeUnique<CXFA_Validate>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Validate>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DigestMethods:
-      node = pdfium::MakeUnique<CXFA_DigestMethods>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DigestMethods>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::NumberPatterns:
-      node = pdfium::MakeUnique<CXFA_NumberPatterns>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_NumberPatterns>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::PageSet:
-      node = pdfium::MakeUnique<CXFA_PageSet>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_PageSet>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Integer:
-      node = pdfium::MakeUnique<CXFA_Integer>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Integer>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SoapAddress:
-      node = pdfium::MakeUnique<CXFA_SoapAddress>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SoapAddress>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Equate:
-      node = pdfium::MakeUnique<CXFA_Equate>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Equate>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::FormFieldFilling:
-      node = pdfium::MakeUnique<CXFA_FormFieldFilling>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_FormFieldFilling>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::PageRange:
-      node = pdfium::MakeUnique<CXFA_PageRange>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_PageRange>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Update:
-      node = pdfium::MakeUnique<CXFA_Update>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Update>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ConnectString:
-      node = pdfium::MakeUnique<CXFA_ConnectString>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ConnectString>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Mode:
-      node = pdfium::MakeUnique<CXFA_Mode>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Mode>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Layout:
-      node = pdfium::MakeUnique<CXFA_Layout>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Layout>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Sharpxml:
-      node = pdfium::MakeUnique<CXFA_Sharpxml>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Sharpxml>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::XsdConnection:
-      node = pdfium::MakeUnique<CXFA_XsdConnection>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_XsdConnection>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Traverse:
-      node = pdfium::MakeUnique<CXFA_Traverse>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Traverse>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Encodings:
-      node = pdfium::MakeUnique<CXFA_Encodings>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Encodings>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Template:
-      node = pdfium::MakeUnique<CXFA_Template>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Template>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Acrobat:
-      node = pdfium::MakeUnique<CXFA_Acrobat>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Acrobat>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ValidationMessaging:
-      node = pdfium::MakeUnique<CXFA_ValidationMessaging>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ValidationMessaging>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Signing:
-      node = pdfium::MakeUnique<CXFA_Signing>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Signing>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Script:
-      node = pdfium::MakeUnique<CXFA_Script>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Script>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::AddViewerPreferences:
-      node = pdfium::MakeUnique<CXFA_AddViewerPreferences>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_AddViewerPreferences>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::AlwaysEmbed:
-      node = pdfium::MakeUnique<CXFA_AlwaysEmbed>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_AlwaysEmbed>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::PasswordEdit:
-      node = pdfium::MakeUnique<CXFA_PasswordEdit>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_PasswordEdit>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::NumericEdit:
-      node = pdfium::MakeUnique<CXFA_NumericEdit>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_NumericEdit>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::EncryptionMethod:
-      node = pdfium::MakeUnique<CXFA_EncryptionMethod>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_EncryptionMethod>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Change:
-      node = pdfium::MakeUnique<CXFA_Change>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Change>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::PageArea:
-      node = pdfium::MakeUnique<CXFA_PageArea>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_PageArea>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SubmitUrl:
-      node = pdfium::MakeUnique<CXFA_SubmitUrl>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SubmitUrl>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Oids:
-      node = pdfium::MakeUnique<CXFA_Oids>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Oids>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Signature:
-      node = pdfium::MakeUnique<CXFA_Signature>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Signature>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ADBE_JSConsole:
-      node = pdfium::MakeUnique<CXFA_ADBE_JSConsole>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ADBE_JSConsole>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Caption:
-      node = pdfium::MakeUnique<CXFA_Caption>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Caption>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Relevant:
-      node = pdfium::MakeUnique<CXFA_Relevant>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Relevant>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::FlipLabel:
-      node = pdfium::MakeUnique<CXFA_FlipLabel>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_FlipLabel>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ExData:
-      node = pdfium::MakeUnique<CXFA_ExData>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ExData>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DayNames:
-      node = pdfium::MakeUnique<CXFA_DayNames>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DayNames>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SoapAction:
-      node = pdfium::MakeUnique<CXFA_SoapAction>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SoapAction>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DefaultTypeface:
-      node = pdfium::MakeUnique<CXFA_DefaultTypeface>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DefaultTypeface>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Manifest:
-      node = pdfium::MakeUnique<CXFA_Manifest>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Manifest>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Overflow:
-      node = pdfium::MakeUnique<CXFA_Overflow>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Overflow>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Linear:
-      node = pdfium::MakeUnique<CXFA_Linear>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Linear>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::CurrencySymbol:
-      node = pdfium::MakeUnique<CXFA_CurrencySymbol>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_CurrencySymbol>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Delete:
-      node = pdfium::MakeUnique<CXFA_Delete>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Delete>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DigestMethod:
-      node = pdfium::MakeUnique<CXFA_DigestMethod>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DigestMethod>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::InstanceManager:
-      node = pdfium::MakeUnique<CXFA_InstanceManager>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_InstanceManager>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::EquateRange:
-      node = pdfium::MakeUnique<CXFA_EquateRange>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_EquateRange>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Medium:
-      node = pdfium::MakeUnique<CXFA_Medium>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Medium>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::TextEdit:
-      node = pdfium::MakeUnique<CXFA_TextEdit>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_TextEdit>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::TemplateCache:
-      node = pdfium::MakeUnique<CXFA_TemplateCache>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_TemplateCache>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::CompressObjectStream:
-      node = pdfium::MakeUnique<CXFA_CompressObjectStream>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_CompressObjectStream>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DataValue:
-      node = pdfium::MakeUnique<CXFA_DataValue>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DataValue>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::AccessibleContent:
-      node = pdfium::MakeUnique<CXFA_AccessibleContent>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_AccessibleContent>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::IncludeXDPContent:
-      node = pdfium::MakeUnique<CXFA_IncludeXDPContent>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_IncludeXDPContent>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::XmlConnection:
-      node = pdfium::MakeUnique<CXFA_XmlConnection>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_XmlConnection>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ValidateApprovalSignatures:
-      node = pdfium::MakeUnique<CXFA_ValidateApprovalSignatures>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ValidateApprovalSignatures>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SignData:
-      node = pdfium::MakeUnique<CXFA_SignData>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SignData>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Packets:
-      node = pdfium::MakeUnique<CXFA_Packets>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Packets>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DatePattern:
-      node = pdfium::MakeUnique<CXFA_DatePattern>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DatePattern>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DuplexOption:
-      node = pdfium::MakeUnique<CXFA_DuplexOption>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DuplexOption>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Base:
-      node = pdfium::MakeUnique<CXFA_Base>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Base>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Bind:
-      node = pdfium::MakeUnique<CXFA_Bind>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Bind>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Compression:
-      node = pdfium::MakeUnique<CXFA_Compression>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Compression>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::User:
-      node = pdfium::MakeUnique<CXFA_User>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_User>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Rectangle:
-      node = pdfium::MakeUnique<CXFA_Rectangle>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Rectangle>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::EffectiveOutputPolicy:
-      node = pdfium::MakeUnique<CXFA_EffectiveOutputPolicy>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_EffectiveOutputPolicy>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ADBE_JSDebugger:
-      node = pdfium::MakeUnique<CXFA_ADBE_JSDebugger>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ADBE_JSDebugger>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Acrobat7:
-      node = pdfium::MakeUnique<CXFA_Acrobat7>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Acrobat7>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Interactive:
-      node = pdfium::MakeUnique<CXFA_Interactive>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Interactive>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Locale:
-      node = pdfium::MakeUnique<CXFA_Locale>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Locale>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::CurrentPage:
-      node = pdfium::MakeUnique<CXFA_CurrentPage>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_CurrentPage>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Data:
-      node = pdfium::MakeUnique<CXFA_Data>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Data>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Date:
-      node = pdfium::MakeUnique<CXFA_Date>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Date>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Desc:
-      node = pdfium::MakeUnique<CXFA_Desc>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Desc>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Encrypt:
-      node = pdfium::MakeUnique<CXFA_Encrypt>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Encrypt>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Draw:
-      node = pdfium::MakeUnique<CXFA_Draw>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Draw>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Encryption:
-      node = pdfium::MakeUnique<CXFA_Encryption>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Encryption>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::MeridiemNames:
-      node = pdfium::MakeUnique<CXFA_MeridiemNames>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_MeridiemNames>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Messaging:
-      node = pdfium::MakeUnique<CXFA_Messaging>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Messaging>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Speak:
-      node = pdfium::MakeUnique<CXFA_Speak>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Speak>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DataGroup:
-      node = pdfium::MakeUnique<CXFA_DataGroup>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DataGroup>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Common:
-      node = pdfium::MakeUnique<CXFA_Common>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Common>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Sharptext:
-      node = pdfium::MakeUnique<CXFA_Sharptext>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Sharptext>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::PaginationOverride:
-      node = pdfium::MakeUnique<CXFA_PaginationOverride>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_PaginationOverride>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Reasons:
-      node = pdfium::MakeUnique<CXFA_Reasons>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Reasons>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SignatureProperties:
-      node = pdfium::MakeUnique<CXFA_SignatureProperties>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SignatureProperties>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Threshold:
-      node = pdfium::MakeUnique<CXFA_Threshold>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Threshold>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::AppearanceFilter:
-      node = pdfium::MakeUnique<CXFA_AppearanceFilter>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_AppearanceFilter>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Fill:
-      node = pdfium::MakeUnique<CXFA_Fill>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Fill>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Font:
-      node = pdfium::MakeUnique<CXFA_Font>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Font>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Form:
-      node = pdfium::MakeUnique<CXFA_Form>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Form>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::MediumInfo:
-      node = pdfium::MakeUnique<CXFA_MediumInfo>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_MediumInfo>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Certificate:
-      node = pdfium::MakeUnique<CXFA_Certificate>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Certificate>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Password:
-      node = pdfium::MakeUnique<CXFA_Password>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Password>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::RunScripts:
-      node = pdfium::MakeUnique<CXFA_RunScripts>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_RunScripts>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Trace:
-      node = pdfium::MakeUnique<CXFA_Trace>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Trace>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Float:
-      node = pdfium::MakeUnique<CXFA_Float>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Float>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::RenderPolicy:
-      node = pdfium::MakeUnique<CXFA_RenderPolicy>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_RenderPolicy>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Destination:
-      node = pdfium::MakeUnique<CXFA_Destination>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Destination>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Value:
-      node = pdfium::MakeUnique<CXFA_Value>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Value>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Bookend:
-      node = pdfium::MakeUnique<CXFA_Bookend>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Bookend>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ExObject:
-      node = pdfium::MakeUnique<CXFA_ExObject>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ExObject>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::OpenAction:
-      node = pdfium::MakeUnique<CXFA_OpenAction>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_OpenAction>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::NeverEmbed:
-      node = pdfium::MakeUnique<CXFA_NeverEmbed>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_NeverEmbed>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::BindItems:
-      node = pdfium::MakeUnique<CXFA_BindItems>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_BindItems>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Calculate:
-      node = pdfium::MakeUnique<CXFA_Calculate>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Calculate>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Print:
-      node = pdfium::MakeUnique<CXFA_Print>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Print>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Extras:
-      node = pdfium::MakeUnique<CXFA_Extras>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Extras>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Proto:
-      node = pdfium::MakeUnique<CXFA_Proto>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Proto>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DSigData:
-      node = pdfium::MakeUnique<CXFA_DSigData>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DSigData>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Creator:
-      node = pdfium::MakeUnique<CXFA_Creator>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Creator>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Connect:
-      node = pdfium::MakeUnique<CXFA_Connect>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Connect>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Permissions:
-      node = pdfium::MakeUnique<CXFA_Permissions>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Permissions>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::ConnectionSet:
-      node = pdfium::MakeUnique<CXFA_ConnectionSet>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_ConnectionSet>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Submit:
-      node = pdfium::MakeUnique<CXFA_Submit>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Submit>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Range:
-      node = pdfium::MakeUnique<CXFA_Range>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Range>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Linearized:
-      node = pdfium::MakeUnique<CXFA_Linearized>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Linearized>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Packet:
-      node = pdfium::MakeUnique<CXFA_Packet>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Packet>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::RootElement:
-      node = pdfium::MakeUnique<CXFA_RootElement>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_RootElement>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::PlaintextMetadata:
-      node = pdfium::MakeUnique<CXFA_PlaintextMetadata>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_PlaintextMetadata>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::NumberSymbols:
-      node = pdfium::MakeUnique<CXFA_NumberSymbols>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_NumberSymbols>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::PrintHighQuality:
-      node = pdfium::MakeUnique<CXFA_PrintHighQuality>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_PrintHighQuality>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Driver:
-      node = pdfium::MakeUnique<CXFA_Driver>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Driver>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::IncrementalLoad:
-      node = pdfium::MakeUnique<CXFA_IncrementalLoad>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_IncrementalLoad>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::SubjectDN:
-      node = pdfium::MakeUnique<CXFA_SubjectDN>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_SubjectDN>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::CompressLogicalStructure:
-      node = pdfium::MakeUnique<CXFA_CompressLogicalStructure>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_CompressLogicalStructure>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::IncrementalMerge:
-      node = pdfium::MakeUnique<CXFA_IncrementalMerge>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_IncrementalMerge>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Radial:
-      node = pdfium::MakeUnique<CXFA_Radial>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Radial>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Variables:
-      node = pdfium::MakeUnique<CXFA_Variables>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Variables>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::TimePatterns:
-      node = pdfium::MakeUnique<CXFA_TimePatterns>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_TimePatterns>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::EffectiveInputPolicy:
-      node = pdfium::MakeUnique<CXFA_EffectiveInputPolicy>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_EffectiveInputPolicy>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::NameAttr:
-      node = pdfium::MakeUnique<CXFA_NameAttr>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_NameAttr>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Conformance:
-      node = pdfium::MakeUnique<CXFA_Conformance>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Conformance>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Transform:
-      node = pdfium::MakeUnique<CXFA_Transform>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Transform>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::LockDocument:
-      node = pdfium::MakeUnique<CXFA_LockDocument>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_LockDocument>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::BreakAfter:
-      node = pdfium::MakeUnique<CXFA_BreakAfter>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_BreakAfter>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Line:
-      node = pdfium::MakeUnique<CXFA_Line>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Line>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Source:
-      node = pdfium::MakeUnique<CXFA_Source>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Source>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Occur:
-      node = pdfium::MakeUnique<CXFA_Occur>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Occur>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::PickTrayByPDFSize:
-      node = pdfium::MakeUnique<CXFA_PickTrayByPDFSize>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_PickTrayByPDFSize>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::MonthNames:
-      node = pdfium::MakeUnique<CXFA_MonthNames>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_MonthNames>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Severity:
-      node = pdfium::MakeUnique<CXFA_Severity>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Severity>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::GroupParent:
-      node = pdfium::MakeUnique<CXFA_GroupParent>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_GroupParent>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::DocumentAssembly:
-      node = pdfium::MakeUnique<CXFA_DocumentAssembly>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_DocumentAssembly>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::NumberSymbol:
-      node = pdfium::MakeUnique<CXFA_NumberSymbol>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_NumberSymbol>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Tagged:
-      node = pdfium::MakeUnique<CXFA_Tagged>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Tagged>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
     case XFA_Element::Items:
-      node = pdfium::MakeUnique<CXFA_Items>(doc, packet);
+      node = cppgc::MakeGarbageCollected<CXFA_Items>(
+          doc->GetHeap()->GetAllocationHandle(), doc, packet);
       break;
-    default:
-      NOTREACHED();
+    case XFA_Element::DataWindow:
+    case XFA_Element::Deltas:
+    case XFA_Element::EventPseudoModel:
+    case XFA_Element::HostPseudoModel:
+    case XFA_Element::LayoutPseudoModel:
+    case XFA_Element::List:
+    case XFA_Element::ListDuplicate:
+    case XFA_Element::LogPseudoModel:
+    case XFA_Element::Model:
+    case XFA_Element::Node:
+    case XFA_Element::NodeWithDesc:
+    case XFA_Element::NodeWithUse:
+    case XFA_Element::NodeWithValue:
+    case XFA_Element::Object:
+    case XFA_Element::SignaturePseudoModel:
+    case XFA_Element::Tree:
+    case XFA_Element::TreeList:
+    case XFA_Element::Unknown:
+      // These defined elements can not be made from an XML parse. Some are
+      // not CXFA_Node sub-classes, some are only used as intermediate classes,
+      // and so forth.
       return nullptr;
   }
   if (!node || !node->IsValidInPacket(packet))

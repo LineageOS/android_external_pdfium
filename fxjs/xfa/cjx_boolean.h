@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ class CXFA_Boolean;
 
 class CJX_Boolean final : public CJX_Object {
  public:
-  explicit CJX_Boolean(CXFA_Boolean* node);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CJX_Boolean() override;
 
   // CJX_Object:
@@ -24,6 +24,8 @@ class CJX_Boolean final : public CJX_Object {
   JSE_PROP(value);
 
  private:
+  explicit CJX_Boolean(CXFA_Boolean* node);
+
   using Type__ = CJX_Boolean;
   using ParentType__ = CJX_Object;
 

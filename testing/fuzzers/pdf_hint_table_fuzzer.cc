@@ -1,4 +1,4 @@
-// Copyright 2016 The PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@
 #include "core/fpdfapi/parser/cpdf_linearized_header.h"
 #include "core/fpdfapi/parser/cpdf_number.h"
 #include "core/fxcrt/cfx_bitstream.h"
-#include "third_party/base/ptr_util.h"
 #include "third_party/base/span.h"
 
 int32_t GetData(const int32_t** data32, const uint8_t** data, size_t* size) {
@@ -28,7 +27,7 @@ class HintTableForFuzzing final : public CPDF_HintTables {
                       int shared_hint_table_offset)
       : CPDF_HintTables(nullptr, pLinearized),
         shared_hint_table_offset_(shared_hint_table_offset) {}
-  ~HintTableForFuzzing() {}
+  ~HintTableForFuzzing() = default;
 
   void Fuzz(const uint8_t* data, size_t size) {
     if (shared_hint_table_offset_ <= 0)
@@ -76,9 +75,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   auto hint_info = pdfium::MakeRetain<CPDF_Array>();
   // Add primary hint stream offset
-  hint_info->AddNew<CPDF_Number>(GetData(&data32, &data, &size));
+  hint_info->AppendNew<CPDF_Number>(GetData(&data32, &data, &size));
   // Add primary hint stream size
-  hint_info->AddNew<CPDF_Number>(GetData(&data32, &data, &size));
+  hint_info->AppendNew<CPDF_Number>(GetData(&data32, &data, &size));
   // Set hint stream info.
   linearized_dict->SetFor("H", std::move(hint_info));
 

@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,7 @@
 
 #include "xfa/fxfa/cxfa_fontmgr.h"
 
-#include <algorithm>
-#include <memory>
-#include <utility>
-
 #include "core/fpdfapi/parser/cpdf_dictionary.h"
-#include "core/fpdfapi/parser/cpdf_document.h"
 #include "core/fxge/cfx_fontmgr.h"
 #include "core/fxge/cfx_gemodule.h"
 #include "xfa/fgas/font/cfgas_defaultfontmanager.h"
@@ -24,43 +19,38 @@ CXFA_FontMgr::CXFA_FontMgr() = default;
 
 CXFA_FontMgr::~CXFA_FontMgr() = default;
 
-RetainPtr<CFGAS_GEFont> CXFA_FontMgr::GetFont(CXFA_FFDoc* hDoc,
-                                              WideStringView wsFontFamily,
+void CXFA_FontMgr::Trace(cppgc::Visitor* visitor) const {}
+
+RetainPtr<CFGAS_GEFont> CXFA_FontMgr::GetFont(CXFA_FFDoc* pDoc,
+                                              const WideString& wsFontFamily,
                                               uint32_t dwFontStyles) {
-  uint32_t dwHash = FX_HashCode_GetW(wsFontFamily, false);
-  ByteString bsKey = ByteString::Format("%u%u%u", dwHash, dwFontStyles, 0xFFFF);
-  auto iter = m_FontMap.find(bsKey);
+  auto key = std::make_pair(wsFontFamily, dwFontStyles);
+  auto iter = m_FontMap.find(key);
   if (iter != m_FontMap.end())
     return iter->second;
 
   WideString wsEnglishName = FGAS_FontNameToEnglishName(wsFontFamily);
-  CFGAS_PDFFontMgr* pMgr = hDoc->GetPDFFontMgr();
-  RetainPtr<CFGAS_GEFont> pFont;
-  if (pMgr) {
-    pFont = pMgr->GetFont(wsEnglishName.AsStringView(), dwFontStyles, true);
+  RetainPtr<CFGAS_GEFont> pFont =
+      pDoc->GetPDFFont(wsEnglishName, dwFontStyles, true);
+  if (pFont)
+    return pFont;
+
+  pFont = CFGAS_DefaultFontManager::GetFont(wsFontFamily, dwFontStyles);
+  if (!pFont) {
+    pFont = pDoc->GetPDFFont(wsEnglishName, dwFontStyles, false);
     if (pFont)
       return pFont;
   }
   if (!pFont) {
-    pFont = CFGAS_DefaultFontManager::GetFont(hDoc->GetApp()->GetFDEFontMgr(),
-                                              wsFontFamily, dwFontStyles);
-  }
-  if (!pFont && pMgr) {
-    pFont = pMgr->GetFont(wsEnglishName.AsStringView(), dwFontStyles, false);
-    if (pFont)
-      return pFont;
-  }
-  if (!pFont) {
-    pFont = CFGAS_DefaultFontManager::GetDefaultFont(
-        hDoc->GetApp()->GetFDEFontMgr(), wsFontFamily, dwFontStyles);
+    pFont = CFGAS_DefaultFontManager::GetDefaultFont(dwFontStyles);
   }
   if (!pFont) {
     pFont = CFGAS_GEFont::LoadStockFont(
-        hDoc->GetPDFDoc(), hDoc->GetApp()->GetFDEFontMgr(),
-        ByteString::Format("%ls", WideString(wsFontFamily).c_str()));
+        pDoc->GetPDFDoc(), ByteString::Format("%ls", wsFontFamily.c_str()));
   }
-  if (pFont)
-    m_FontMap[bsKey] = pFont;
+  if (!pFont)
+    return nullptr;
 
+  m_FontMap[key] = pFont;
   return pFont;
 }
