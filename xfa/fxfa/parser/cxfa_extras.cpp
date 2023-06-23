@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include "xfa/fxfa/parser/cxfa_extras.h"
 
 #include "fxjs/xfa/cjx_extras.h"
-#include "third_party/base/ptr_util.h"
+#include "xfa/fxfa/parser/cxfa_document.h"
 
 namespace {
 
@@ -23,12 +23,14 @@ const CXFA_Node::AttributeData kExtrasAttributeData[] = {
 CXFA_Extras::CXFA_Extras(CXFA_Document* doc, XFA_PacketType packet)
     : CXFA_Node(doc,
                 packet,
-                (XFA_XDPPACKET_SourceSet | XFA_XDPPACKET_Template |
-                 XFA_XDPPACKET_Form),
+                {XFA_XDPPACKET::kSourceSet, XFA_XDPPACKET::kTemplate,
+                 XFA_XDPPACKET::kForm},
                 XFA_ObjectType::Node,
                 XFA_Element::Extras,
                 {},
                 kExtrasAttributeData,
-                pdfium::MakeUnique<CJX_Extras>(this)) {}
+                cppgc::MakeGarbageCollected<CJX_Extras>(
+                    doc->GetHeap()->GetAllocationHandle(),
+                    this)) {}
 
 CXFA_Extras::~CXFA_Extras() = default;

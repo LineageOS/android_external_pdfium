@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ class CXFA_List;
 
 class CJX_List : public CJX_Object {
  public:
-  explicit CJX_List(CXFA_List* list);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CJX_List() override;
 
   // CJX_Object:
@@ -26,6 +26,9 @@ class CJX_List : public CJX_Object {
   JSE_METHOD(remove);
 
   JSE_PROP(length);
+
+ protected:
+  explicit CJX_List(CXFA_List* list);
 
  private:
   using Type__ = CJX_List;

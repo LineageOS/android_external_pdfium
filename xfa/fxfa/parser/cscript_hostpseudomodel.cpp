@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,14 @@
 #include "xfa/fxfa/parser/cscript_hostpseudomodel.h"
 
 #include "fxjs/xfa/cjx_hostpseudomodel.h"
-#include "third_party/base/ptr_util.h"
+#include "xfa/fxfa/parser/cxfa_document.h"
 
-CScript_HostPseudoModel::CScript_HostPseudoModel(CXFA_Document* pDocument)
-    : CXFA_Object(pDocument,
+CScript_HostPseudoModel::CScript_HostPseudoModel(CXFA_Document* doc)
+    : CXFA_Object(doc,
                   XFA_ObjectType::Object,
                   XFA_Element::HostPseudoModel,
-                  pdfium::MakeUnique<CJX_HostPseudoModel>(this)) {}
+                  cppgc::MakeGarbageCollected<CJX_HostPseudoModel>(
+                      doc->GetHeap()->GetAllocationHandle(),
+                      this)) {}
 
 CScript_HostPseudoModel::~CScript_HostPseudoModel() = default;

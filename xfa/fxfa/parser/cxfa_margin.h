@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 
 class CXFA_Margin final : public CXFA_Node {
  public:
-  CXFA_Margin(CXFA_Document* doc, XFA_PacketType packet);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_Margin() override;
 
   float GetLeftInset() const;
@@ -19,10 +19,13 @@ class CXFA_Margin final : public CXFA_Node {
   float GetRightInset() const;
   float GetBottomInset() const;
 
-  Optional<float> TryLeftInset() const;
-  Optional<float> TryTopInset() const;
-  Optional<float> TryRightInset() const;
-  Optional<float> TryBottomInset() const;
+  absl::optional<float> TryLeftInset() const;
+  absl::optional<float> TryTopInset() const;
+  absl::optional<float> TryRightInset() const;
+  absl::optional<float> TryBottomInset() const;
+
+ private:
+  CXFA_Margin(CXFA_Document* doc, XFA_PacketType packet);
 };
 
 #endif  // XFA_FXFA_PARSER_CXFA_MARGIN_H_

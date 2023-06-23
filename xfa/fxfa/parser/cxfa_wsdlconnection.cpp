@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,17 @@
 #include "xfa/fxfa/parser/cxfa_wsdlconnection.h"
 
 #include "fxjs/xfa/cjx_wsdlconnection.h"
-#include "third_party/base/ptr_util.h"
+#include "xfa/fxfa/parser/cxfa_document.h"
 
 namespace {
 
 const CXFA_Node::PropertyData kWsdlConnectionPropertyData[] = {
-    {XFA_Element::Operation, 1, 0},
-    {XFA_Element::WsdlAddress, 1, 0},
-    {XFA_Element::SoapAddress, 1, 0},
-    {XFA_Element::SoapAction, 1, 0},
-    {XFA_Element::EffectiveOutputPolicy, 1, 0},
-    {XFA_Element::EffectiveInputPolicy, 1, 0},
+    {XFA_Element::Operation, 1, {}},
+    {XFA_Element::WsdlAddress, 1, {}},
+    {XFA_Element::SoapAddress, 1, {}},
+    {XFA_Element::SoapAction, 1, {}},
+    {XFA_Element::EffectiveOutputPolicy, 1, {}},
+    {XFA_Element::EffectiveInputPolicy, 1, {}},
 };
 
 const CXFA_Node::AttributeData kWsdlConnectionAttributeData[] = {
@@ -31,11 +31,13 @@ CXFA_WsdlConnection::CXFA_WsdlConnection(CXFA_Document* doc,
                                          XFA_PacketType packet)
     : CXFA_Node(doc,
                 packet,
-                XFA_XDPPACKET_ConnectionSet,
+                XFA_XDPPACKET::kConnectionSet,
                 XFA_ObjectType::Node,
                 XFA_Element::WsdlConnection,
                 kWsdlConnectionPropertyData,
                 kWsdlConnectionAttributeData,
-                pdfium::MakeUnique<CJX_WsdlConnection>(this)) {}
+                cppgc::MakeGarbageCollected<CJX_WsdlConnection>(
+                    doc->GetHeap()->GetAllocationHandle(),
+                    this)) {}
 
 CXFA_WsdlConnection::~CXFA_WsdlConnection() = default;

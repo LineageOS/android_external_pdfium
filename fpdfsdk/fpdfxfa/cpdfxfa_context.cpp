@@ -1,10 +1,12 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // Original code copyright 2014 Foxit Software Inc. http://www.foxitsoftware.com
 
 #include "fpdfsdk/fpdfxfa/cpdfxfa_context.h"
+
+#include <stdint.h>
 
 #include <algorithm>
 #include <utility>
@@ -13,14 +15,22 @@
 #include "core/fpdfapi/parser/cpdf_dictionary.h"
 #include "core/fpdfapi/parser/cpdf_document.h"
 #include "core/fpdfapi/parser/cpdf_seekablemultistream.h"
+#include "core/fxcrt/autonuller.h"
+#include "core/fxcrt/fixed_zeroed_data_vector.h"
+#include "core/fxcrt/stl_util.h"
+#include "core/fxcrt/xml/cfx_xmldocument.h"
+#include "core/fxcrt/xml/cfx_xmlparser.h"
 #include "fpdfsdk/cpdfsdk_formfillenvironment.h"
 #include "fpdfsdk/cpdfsdk_pageview.h"
+#include "fpdfsdk/fpdfxfa/cpdfxfa_docenvironment.h"
 #include "fpdfsdk/fpdfxfa/cpdfxfa_page.h"
+#include "fxbarcode/BC_Library.h"
 #include "fxjs/cjs_runtime.h"
 #include "fxjs/ijs_runtime.h"
 #include "public/fpdf_formfill.h"
-#include "third_party/base/ptr_util.h"
-#include "third_party/base/stl_util.h"
+#include "third_party/base/check.h"
+#include "v8/include/cppgc/allocation.h"
+#include "xfa/fgas/font/cfgas_gemodule.h"
 #include "xfa/fxfa/cxfa_eventparam.h"
 #include "xfa/fxfa/cxfa_ffapp.h"
 #include "xfa/fxfa/cxfa_ffdoc.h"
@@ -53,62 +63,61 @@ RetainPtr<CPDF_SeekableMultiStream> CreateXFAMultiStream(
   if (!pRoot)
     return nullptr;
 
-  const CPDF_Dictionary* pAcroForm = pRoot->GetDictFor("AcroForm");
+  RetainPtr<const CPDF_Dictionary> pAcroForm = pRoot->GetDictFor("AcroForm");
   if (!pAcroForm)
     return nullptr;
 
-  const CPDF_Object* pElementXFA = pAcroForm->GetDirectObjectFor("XFA");
+  RetainPtr<const CPDF_Object> pElementXFA =
+      pAcroForm->GetDirectObjectFor("XFA");
   if (!pElementXFA)
     return nullptr;
 
-  std::vector<const CPDF_Stream*> xfaStreams;
+  std::vector<RetainPtr<const CPDF_Stream>> xfa_streams;
   if (pElementXFA->IsArray()) {
     const CPDF_Array* pXFAArray = pElementXFA->AsArray();
     for (size_t i = 0; i < pXFAArray->size() / 2; i++) {
-      if (const CPDF_Stream* pStream = pXFAArray->GetStreamAt(i * 2 + 1))
-        xfaStreams.push_back(pStream);
+      RetainPtr<const CPDF_Stream> pStream = pXFAArray->GetStreamAt(i * 2 + 1);
+      if (pStream)
+        xfa_streams.push_back(std::move(pStream));
     }
   } else if (pElementXFA->IsStream()) {
-    xfaStreams.push_back(pElementXFA->AsStream());
+    xfa_streams.push_back(ToStream(pElementXFA));
   }
-  if (xfaStreams.empty())
+  if (xfa_streams.empty())
     return nullptr;
 
-  return pdfium::MakeRetain<CPDF_SeekableMultiStream>(xfaStreams);
+  return pdfium::MakeRetain<CPDF_SeekableMultiStream>(std::move(xfa_streams));
 }
 
 }  // namespace
 
+void CPDFXFA_ModuleInit() {
+  CFGAS_GEModule::Create();
+  BC_Library_Init();
+}
+
+void CPDFXFA_ModuleDestroy() {
+  BC_Library_Destroy();
+  CFGAS_GEModule::Destroy();
+}
+
 CPDFXFA_Context::CPDFXFA_Context(CPDF_Document* pPDFDoc)
     : m_pPDFDoc(pPDFDoc),
-      m_pXFAApp(pdfium::MakeUnique<CXFA_FFApp>(this)),
-      m_DocEnv(this) {
-  ASSERT(m_pPDFDoc);
+      m_pDocEnv(std::make_unique<CPDFXFA_DocEnvironment>(this)),
+      m_pGCHeap(FXGC_CreateHeap()) {
+  DCHECK(m_pPDFDoc);
+
+  // There might not be a heap when JS not initialized.
+  if (m_pGCHeap) {
+    m_pXFAApp = cppgc::MakeGarbageCollected<CXFA_FFApp>(
+        m_pGCHeap->GetAllocationHandle(), this);
+  }
 }
 
 CPDFXFA_Context::~CPDFXFA_Context() {
-  m_nLoadStatus = FXFA_LOADSTATUS_CLOSING;
-
-  // Must happen before we remove the form fill environment.
-  CloseXFADoc();
-
-  if (m_pFormFillEnv) {
+  m_nLoadStatus = LoadStatus::kClosing;
+  if (m_pFormFillEnv)
     m_pFormFillEnv->ClearAllFocusedAnnots();
-    // Once we're deleted the FormFillEnvironment will point at a bad underlying
-    // doc so we need to reset it ...
-    m_pFormFillEnv->GetPDFDocument()->SetExtension(nullptr);
-    m_pFormFillEnv.Reset();
-  }
-
-  m_nLoadStatus = FXFA_LOADSTATUS_CLOSED;
-}
-
-void CPDFXFA_Context::CloseXFADoc() {
-  if (!m_pXFADoc)
-    return;
-
-  m_pXFADocView = nullptr;
-  m_pXFADoc.reset();
 }
 
 void CPDFXFA_Context::SetFormFillEnv(
@@ -117,39 +126,50 @@ void CPDFXFA_Context::SetFormFillEnv(
   // context will be different if the form fill environment closes, so, force
   // the layout data to clear.
   if (m_pXFADoc && m_pXFADoc->GetXFADoc()) {
-    // The CPDF_XFADocView has a pointer to the CXFA_LayoutProcessor which is
-    // owned by the CXFA_Document. The Layout Processor will be freed with the
-    // ClearLayoutData() call. Make sure the doc view has already released the
-    // pointer.
-    if (m_pXFADocView)
-      m_pXFADocView->ResetLayoutProcessor();
-
     m_pXFADoc->GetXFADoc()->ClearLayoutData();
+    m_pXFADocView.Clear();
+    m_pXFADoc.Clear();
+    m_pXFAApp.Clear();
+    FXGC_ForceGarbageCollection(m_pGCHeap.get());
   }
-
   m_pFormFillEnv.Reset(pFormFillEnv);
 }
 
 bool CPDFXFA_Context::LoadXFADoc() {
-  m_nLoadStatus = FXFA_LOADSTATUS_LOADING;
+  m_nLoadStatus = LoadStatus::kLoading;
   m_XFAPageList.clear();
 
-  auto stream = CreateXFAMultiStream(m_pPDFDoc.Get());
+  CJS_Runtime* actual_runtime = GetCJSRuntime();  // Null if a stub.
+  if (!actual_runtime) {
+    FXSYS_SetLastError(FPDF_ERR_XFALOAD);
+    return false;
+  }
+
+  auto stream = CreateXFAMultiStream(m_pPDFDoc);
   if (!stream) {
     FXSYS_SetLastError(FPDF_ERR_XFALOAD);
     return false;
   }
 
-  m_pXFADoc = CXFA_FFDoc::CreateAndOpen(m_pXFAApp.get(), &m_DocEnv,
-                                        m_pPDFDoc.Get(), stream);
-  if (!m_pXFADoc) {
+  CFX_XMLParser parser(stream);
+  m_pXML = parser.Parse();
+  if (!m_pXML) {
     FXSYS_SetLastError(FPDF_ERR_XFALOAD);
     return false;
   }
 
-  CJS_Runtime* actual_runtime = GetCJSRuntime();  // Null if a stub.
-  if (!actual_runtime) {
+  AutoNuller<cppgc::Persistent<CXFA_FFDoc>> doc_nuller(&m_pXFADoc);
+  m_pXFADoc = cppgc::MakeGarbageCollected<CXFA_FFDoc>(
+      m_pGCHeap->GetAllocationHandle(), m_pXFAApp, m_pDocEnv.get(), m_pPDFDoc,
+      m_pGCHeap.get());
+
+  if (!m_pXFADoc->OpenDoc(m_pXML.get())) {
     FXSYS_SetLastError(FPDF_ERR_XFALOAD);
+    return false;
+  }
+
+  if (!m_pXFAApp->LoadFWLTheme(m_pXFADoc)) {
+    FXSYS_SetLastError(FPDF_ERR_XFALAYOUT);
     return false;
   }
 
@@ -159,16 +179,22 @@ bool CPDFXFA_Context::LoadXFADoc() {
   else
     m_FormType = FormType::kXFAForeground;
 
+  AutoNuller<cppgc::Persistent<CXFA_FFDocView>> view_nuller(&m_pXFADocView);
   m_pXFADocView = m_pXFADoc->CreateDocView();
+
   if (m_pXFADocView->StartLayout() < 0) {
-    CloseXFADoc();
+    m_pXFADoc->GetXFADoc()->ClearLayoutData();
+    FXGC_ForceGarbageCollection(m_pGCHeap.get());
     FXSYS_SetLastError(FPDF_ERR_XFALAYOUT);
     return false;
   }
 
   m_pXFADocView->DoLayout();
   m_pXFADocView->StopLayout();
-  m_nLoadStatus = FXFA_LOADSTATUS_LOADED;
+
+  view_nuller.AbandonNullification();
+  doc_nuller.AbandonNullification();
+  m_nLoadStatus = LoadStatus::kLoaded;
   return true;
 }
 
@@ -181,15 +207,13 @@ int CPDFXFA_Context::GetPageCount() const {
     case FormType::kXFAFull:
       return m_pXFADoc ? m_pXFADocView->CountPageViews() : 0;
   }
-  NOTREACHED();
-  return 0;
 }
 
-RetainPtr<CPDFXFA_Page> CPDFXFA_Context::GetXFAPage(int page_index) {
+RetainPtr<CPDFXFA_Page> CPDFXFA_Context::GetOrCreateXFAPage(int page_index) {
   if (page_index < 0)
     return nullptr;
 
-  if (pdfium::IndexInBounds(m_XFAPageList, page_index)) {
+  if (fxcrt::IndexInBounds(m_XFAPageList, page_index)) {
     if (m_XFAPageList[page_index])
       return m_XFAPageList[page_index];
   } else {
@@ -201,10 +225,17 @@ RetainPtr<CPDFXFA_Page> CPDFXFA_Context::GetXFAPage(int page_index) {
   if (!pPage->LoadPage())
     return nullptr;
 
-  if (pdfium::IndexInBounds(m_XFAPageList, page_index))
+  if (fxcrt::IndexInBounds(m_XFAPageList, page_index))
     m_XFAPageList[page_index] = pPage;
 
   return pPage;
+}
+
+RetainPtr<CPDFXFA_Page> CPDFXFA_Context::GetXFAPage(int page_index) {
+  if (!fxcrt::IndexInBounds(m_XFAPageList, page_index))
+    return nullptr;
+
+  return m_XFAPageList[page_index];
 }
 
 RetainPtr<CPDFXFA_Page> CPDFXFA_Context::GetXFAPage(
@@ -225,17 +256,13 @@ RetainPtr<CPDFXFA_Page> CPDFXFA_Context::GetXFAPage(
   return nullptr;
 }
 
-CPDF_Document* CPDFXFA_Context::GetPDFDoc() const {
-  return m_pPDFDoc.Get();
-}
-
 void CPDFXFA_Context::DeletePage(int page_index) {
   // Delete from the document first because, if GetPage was never called for
   // this |page_index| then |m_XFAPageList| may have size < |page_index| even
   // if it's a valid page in the document.
   m_pPDFDoc->DeletePage(page_index);
 
-  if (pdfium::IndexInBounds(m_XFAPageList, page_index))
+  if (fxcrt::IndexInBounds(m_XFAPageList, page_index))
     m_XFAPageList[page_index].Reset();
 }
 
@@ -294,7 +321,7 @@ int32_t CPDFXFA_Context::MsgBox(const WideString& wsMessage,
                                 const WideString& wsTitle,
                                 uint32_t dwIconType,
                                 uint32_t dwButtonType) {
-  if (!m_pFormFillEnv || m_nLoadStatus != FXFA_LOADSTATUS_LOADED)
+  if (!m_pFormFillEnv || m_nLoadStatus != LoadStatus::kLoaded)
     return -1;
 
   int iconType =
@@ -312,19 +339,18 @@ WideString CPDFXFA_Context::Response(const WideString& wsQuestion,
   if (!m_pFormFillEnv)
     return WideString();
 
-  int nLength = 2048;
-  std::vector<uint8_t> pBuff(nLength);
-  nLength = m_pFormFillEnv->JS_appResponse(wsQuestion, wsTitle, wsDefaultAnswer,
-                                           WideString(), bMark, pBuff.data(),
-                                           nLength);
-  if (nLength <= 0)
+  constexpr int kMaxWideChars = 1024;
+  FixedZeroedDataVector<uint16_t> buffer(kMaxWideChars);
+  pdfium::span<uint16_t> buffer_span = buffer.writable_span();
+  int byte_length = m_pFormFillEnv->JS_appResponse(
+      wsQuestion, wsTitle, wsDefaultAnswer, WideString(), bMark,
+      pdfium::as_writable_bytes(buffer_span));
+  if (byte_length <= 0)
     return WideString();
 
-  nLength = std::min(2046, nLength);
-  pBuff[nLength] = 0;
-  pBuff[nLength + 1] = 0;
-  return WideString::FromUTF16LE(reinterpret_cast<uint16_t*>(pBuff.data()),
-                                 nLength / sizeof(uint16_t));
+  buffer_span = buffer_span.first(
+      std::min<size_t>(kMaxWideChars, byte_length / sizeof(uint16_t)));
+  return WideString::FromUTF16LE(buffer_span.data(), buffer_span.size());
 }
 
 RetainPtr<IFX_SeekableReadStream> CPDFXFA_Context::DownloadURL(
@@ -353,8 +379,12 @@ bool CPDFXFA_Context::PutRequestURL(const WideString& wsURL,
          m_pFormFillEnv->PutRequestURL(wsURL, wsData, wsEncode);
 }
 
-TimerHandlerIface* CPDFXFA_Context::GetTimerHandler() const {
+CFX_Timer::HandlerIface* CPDFXFA_Context::GetTimerHandler() const {
   return m_pFormFillEnv ? m_pFormFillEnv->GetTimerHandler() : nullptr;
+}
+
+cppgc::Heap* CPDFXFA_Context::GetGCHeap() const {
+  return m_pGCHeap.get();
 }
 
 bool CPDFXFA_Context::SaveDatasetsPackage(
@@ -387,10 +417,11 @@ void CPDFXFA_Context::SendPostSaveToXFADoc() {
     return;
 
   CXFA_FFWidgetHandler* pWidgetHandler = pXFADocView->GetWidgetHandler();
-  auto it = pXFADocView->CreateReadyNodeIterator();
-  while (CXFA_Node* pNode = it->MoveToNext()) {
+  CXFA_ReadyNodeIterator it(pXFADocView->GetRootSubform());
+  while (CXFA_Node* pNode = it.MoveToNext()) {
     CXFA_EventParam preParam;
     preParam.m_eType = XFA_EVENT_PostSave;
+    preParam.m_bTargeted = false;
     pWidgetHandler->ProcessEvent(pNode, &preParam);
   }
   pXFADocView->UpdateDocView();
@@ -407,10 +438,11 @@ void CPDFXFA_Context::SendPreSaveToXFADoc(
     return;
 
   CXFA_FFWidgetHandler* pWidgetHandler = pXFADocView->GetWidgetHandler();
-  auto it = pXFADocView->CreateReadyNodeIterator();
-  while (CXFA_Node* pNode = it->MoveToNext()) {
+  CXFA_ReadyNodeIterator it(pXFADocView->GetRootSubform());
+  while (CXFA_Node* pNode = it.MoveToNext()) {
     CXFA_EventParam preParam;
     preParam.m_eType = XFA_EVENT_PreSave;
+    preParam.m_bTargeted = false;
     pWidgetHandler->ProcessEvent(pNode, &preParam);
   }
   pXFADocView->UpdateDocView();

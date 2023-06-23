@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,7 +26,7 @@ CPDF_Path CPDF_ClipPath::GetPath(size_t i) const {
   return m_Ref.GetObject()->m_PathAndTypeList[i].first;
 }
 
-uint8_t CPDF_ClipPath::GetClipType(size_t i) const {
+CFX_FillRenderOptions::FillType CPDF_ClipPath::GetClipType(size_t i) const {
   return m_Ref.GetObject()->m_PathAndTypeList[i].second;
 }
 
@@ -74,9 +74,17 @@ CFX_FloatRect CPDF_ClipPath::GetClipBox() const {
   return rect;
 }
 
-void CPDF_ClipPath::AppendPath(CPDF_Path path, uint8_t type, bool bAutoMerge) {
+void CPDF_ClipPath::AppendPath(CPDF_Path path,
+                               CFX_FillRenderOptions::FillType type) {
   PathData* pData = m_Ref.GetPrivateCopy();
-  if (!pData->m_PathAndTypeList.empty() && bAutoMerge) {
+  pData->m_PathAndTypeList.emplace_back(path, type);
+}
+
+void CPDF_ClipPath::AppendPathWithAutoMerge(
+    CPDF_Path path,
+    CFX_FillRenderOptions::FillType type) {
+  PathData* pData = m_Ref.GetPrivateCopy();
+  if (!pData->m_PathAndTypeList.empty()) {
     const CPDF_Path& old_path = pData->m_PathAndTypeList.back().first;
     if (old_path.IsRect()) {
       CFX_PointF point0 = old_path.GetPoint(0);
@@ -87,7 +95,7 @@ void CPDF_ClipPath::AppendPath(CPDF_Path path, uint8_t type, bool bAutoMerge) {
         pData->m_PathAndTypeList.pop_back();
     }
   }
-  pData->m_PathAndTypeList.push_back(std::make_pair(path, type));
+  AppendPath(path, type);
 }
 
 void CPDF_ClipPath::AppendTexts(
@@ -107,7 +115,7 @@ void CPDF_ClipPath::CopyClipPath(const CPDF_ClipPath& that) {
     return;
 
   for (size_t i = 0; i < that.GetPathCount(); ++i)
-    AppendPath(that.GetPath(i), that.GetClipType(i), /*bAutoMerge=*/false);
+    AppendPath(that.GetPath(i), that.GetClipType(i));
 }
 
 void CPDF_ClipPath::Transform(const CFX_Matrix& matrix) {
@@ -123,10 +131,9 @@ void CPDF_ClipPath::Transform(const CFX_Matrix& matrix) {
 
 CPDF_ClipPath::PathData::PathData() = default;
 
-CPDF_ClipPath::PathData::PathData(const PathData& that) {
-  m_PathAndTypeList = that.m_PathAndTypeList;
-
-  m_TextList.resize(that.m_TextList.size());
+CPDF_ClipPath::PathData::PathData(const PathData& that)
+    : m_PathAndTypeList(that.m_PathAndTypeList),
+      m_TextList(that.m_TextList.size()) {
   for (size_t i = 0; i < that.m_TextList.size(); ++i) {
     if (that.m_TextList[i])
       m_TextList[i] = that.m_TextList[i]->Clone();

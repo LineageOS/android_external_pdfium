@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include "xfa/fxfa/parser/cxfa_recordset.h"
 
 #include "fxjs/xfa/cjx_node.h"
-#include "third_party/base/ptr_util.h"
+#include "xfa/fxfa/parser/cxfa_document.h"
 
 namespace {
 
@@ -34,11 +34,13 @@ const CXFA_Node::AttributeData kRecordSetAttributeData[] = {
 CXFA_RecordSet::CXFA_RecordSet(CXFA_Document* doc, XFA_PacketType packet)
     : CXFA_Node(doc,
                 packet,
-                XFA_XDPPACKET_SourceSet,
+                XFA_XDPPACKET::kSourceSet,
                 XFA_ObjectType::Node,
                 XFA_Element::RecordSet,
                 {},
                 kRecordSetAttributeData,
-                pdfium::MakeUnique<CJX_Node>(this)) {}
+                cppgc::MakeGarbageCollected<CJX_Node>(
+                    doc->GetHeap()->GetAllocationHandle(),
+                    this)) {}
 
 CXFA_RecordSet::~CXFA_RecordSet() = default;

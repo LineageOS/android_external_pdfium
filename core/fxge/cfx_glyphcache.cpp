@@ -1,10 +1,12 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // Original code copyright 2014 Foxit Software Inc. http://www.foxitsoftware.com
 
 #include "core/fxge/cfx_glyphcache.h"
+
+#include <stdarg.h>
 
 #include <algorithm>
 #include <limits>
@@ -13,27 +15,30 @@
 
 #include "build/build_config.h"
 #include "core/fxcrt/fx_codepage.h"
+#include "core/fxge/cfx_defaultrenderdevice.h"
 #include "core/fxge/cfx_font.h"
 #include "core/fxge/cfx_fontmgr.h"
 #include "core/fxge/cfx_gemodule.h"
 #include "core/fxge/cfx_glyphbitmap.h"
-#include "core/fxge/cfx_pathdata.h"
+#include "core/fxge/cfx_path.h"
 #include "core/fxge/cfx_substfont.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
-#include "core/fxge/fx_freetype.h"
-#include "core/fxge/render_defines.h"
+#include "core/fxge/freetype/fx_freetype.h"
 #include "core/fxge/scoped_font_transform.h"
 #include "third_party/base/numerics/safe_math.h"
-#include "third_party/base/ptr_util.h"
 
-#if defined _SKIA_SUPPORT_ || _SKIA_SUPPORT_PATHS_
-#include "third_party/skia/include/core/SkStream.h"
-#include "third_party/skia/include/core/SkTypeface.h"
+#if defined(_SKIA_SUPPORT_)
+#include "third_party/skia/include/core/SkStream.h"  // nogncheck
+#include "third_party/skia/include/core/SkTypeface.h"  // nogncheck
 
-#if defined(OS_WIN)
-#include "third_party/skia/include/core/SkFontMgr.h"
-#include "third_party/skia/include/ports/SkFontMgr_empty.h"
+#if BUILDFLAG(IS_WIN)
+#include "third_party/skia/include/core/SkFontMgr.h"  // nogncheck
+#include "third_party/skia/include/ports/SkFontMgr_empty.h"  // nogncheck
 #endif
+#endif
+
+#if BUILDFLAG(IS_APPLE)
+#include "core/fxge/cfx_textrenderoptions.h"
 #endif
 
 namespace {
@@ -63,7 +68,7 @@ void UniqueKeyGen::Generate(int count, ...) {
 void GenKey(UniqueKeyGen* pKeyGen,
             const CFX_Font* pFont,
             const CFX_Matrix& matrix,
-            uint32_t dest_width,
+            int dest_width,
             int anti_alias,
             bool bNative) {
   int nMatrixA = static_cast<int>(matrix.a * 10000);
@@ -71,6 +76,7 @@ void GenKey(UniqueKeyGen* pKeyGen,
   int nMatrixC = static_cast<int>(matrix.c * 10000);
   int nMatrixD = static_cast<int>(matrix.d * 10000);
 
+#if BUILDFLAG(IS_APPLE)
   if (bNative) {
     if (pFont->GetSubstFont()) {
       pKeyGen->Generate(10, nMatrixA, nMatrixB, nMatrixC, nMatrixD, dest_width,
@@ -81,22 +87,27 @@ void GenKey(UniqueKeyGen* pKeyGen,
       pKeyGen->Generate(7, nMatrixA, nMatrixB, nMatrixC, nMatrixD, dest_width,
                         anti_alias, 3);
     }
+    return;
+  }
+#else
+  CHECK(!bNative);
+#endif
+
+  if (pFont->GetSubstFont()) {
+    pKeyGen->Generate(9, nMatrixA, nMatrixB, nMatrixC, nMatrixD, dest_width,
+                      anti_alias, pFont->GetSubstFont()->m_Weight,
+                      pFont->GetSubstFont()->m_ItalicAngle,
+                      pFont->IsVertical());
   } else {
-    if (pFont->GetSubstFont()) {
-      pKeyGen->Generate(9, nMatrixA, nMatrixB, nMatrixC, nMatrixD, dest_width,
-                        anti_alias, pFont->GetSubstFont()->m_Weight,
-                        pFont->GetSubstFont()->m_ItalicAngle,
-                        pFont->IsVertical());
-    } else {
-      pKeyGen->Generate(6, nMatrixA, nMatrixB, nMatrixC, nMatrixD, dest_width,
-                        anti_alias);
-    }
+    pKeyGen->Generate(6, nMatrixA, nMatrixB, nMatrixC, nMatrixD, dest_width,
+                      anti_alias);
   }
 }
 
 }  // namespace
 
-CFX_GlyphCache::CFX_GlyphCache(RetainPtr<CFX_Face> face) : m_Face(face) {}
+CFX_GlyphCache::CFX_GlyphCache(RetainPtr<CFX_Face> face)
+    : m_Face(std::move(face)) {}
 
 CFX_GlyphCache::~CFX_GlyphCache() = default;
 
@@ -105,7 +116,7 @@ std::unique_ptr<CFX_GlyphBitmap> CFX_GlyphCache::RenderGlyph(
     uint32_t glyph_index,
     bool bFontStyle,
     const CFX_Matrix& matrix,
-    uint32_t dest_width,
+    int dest_width,
     int anti_alias) {
   if (!GetFaceRec())
     return nullptr;
@@ -119,59 +130,52 @@ std::unique_ptr<CFX_GlyphBitmap> CFX_GlyphCache::RenderGlyph(
   const CFX_SubstFont* pSubstFont = pFont->GetSubstFont();
   if (pSubstFont) {
     bUseCJKSubFont = pSubstFont->m_bSubstCJK && bFontStyle;
-    int skew = 0;
+    int angle;
     if (bUseCJKSubFont)
-      skew = pSubstFont->m_bItalicCJK ? -15 : 0;
+      angle = pSubstFont->m_bItalicCJK ? -15 : 0;
     else
-      skew = pSubstFont->m_ItalicAngle;
-    if (skew) {
-      // |skew| is nonpositive so |-skew| is used as the index. We need to make
-      // sure |skew| != INT_MIN since -INT_MIN is undefined.
-      if (skew <= 0 && skew != std::numeric_limits<int>::min() &&
-          static_cast<size_t>(-skew) < CFX_Font::kAngleSkewArraySize) {
-        skew = -CFX_Font::s_AngleSkew[-skew];
-      } else {
-        skew = -58;
-      }
+      angle = pSubstFont->m_ItalicAngle;
+    if (angle) {
+      int skew = CFX_Font::GetSkewFromAngle(angle);
       if (pFont->IsVertical())
         ft_matrix.yx += ft_matrix.yy * skew / 100;
       else
         ft_matrix.xy -= ft_matrix.xx * skew / 100;
     }
-    if (pSubstFont->m_bFlagMM) {
+    if (pSubstFont->IsBuiltInGenericFont()) {
       pFont->AdjustMMParams(glyph_index, dest_width,
                             pFont->GetSubstFont()->m_Weight);
     }
   }
+
   ScopedFontTransform scoped_transform(GetFace(), &ft_matrix);
-  int load_flags = (GetFaceRec()->face_flags & FT_FACE_FLAG_SFNT)
-                       ? FT_LOAD_NO_BITMAP
-                       : (FT_LOAD_NO_BITMAP | FT_LOAD_NO_HINTING);
+  int load_flags = FT_LOAD_NO_BITMAP | FT_LOAD_PEDANTIC;
+  if (!(GetFaceRec()->face_flags & FT_FACE_FLAG_SFNT))
+    load_flags |= FT_LOAD_NO_HINTING;
   int error = FT_Load_Glyph(GetFaceRec(), glyph_index, load_flags);
   if (error) {
     // if an error is returned, try to reload glyphs without hinting.
-    if (load_flags & FT_LOAD_NO_HINTING || load_flags & FT_LOAD_NO_SCALE)
+    if (load_flags & FT_LOAD_NO_HINTING)
       return nullptr;
 
     load_flags |= FT_LOAD_NO_HINTING;
+    load_flags &= ~FT_LOAD_PEDANTIC;
     error = FT_Load_Glyph(GetFaceRec(), glyph_index, load_flags);
     if (error)
       return nullptr;
   }
-  int weight = 0;
+
+  int weight;
   if (bUseCJKSubFont)
     weight = pSubstFont->m_WeightCJK;
   else
     weight = pSubstFont ? pSubstFont->m_Weight : 0;
-  if (pSubstFont && !pSubstFont->m_bFlagMM && weight > 400) {
+  if (pSubstFont && !pSubstFont->IsBuiltInGenericFont() && weight > 400) {
     uint32_t index = (weight - 400) / 10;
-    if (index >= CFX_Font::kWeightPowArraySize)
+    pdfium::base::CheckedNumeric<signed long> level =
+        CFX_Font::GetWeightLevel(pSubstFont->m_Charset, index);
+    if (level.ValueOrDefault(-1) < 0)
       return nullptr;
-    pdfium::base::CheckedNumeric<signed long> level = 0;
-    if (pSubstFont->m_Charset == FX_CHARSET_ShiftJIS)
-      level = CFX_Font::s_WeightPow_SHIFTJIS[index] * 2;
-    else
-      level = CFX_Font::s_WeightPow_11[index];
 
     level = level *
             (abs(static_cast<int>(ft_matrix.xx)) +
@@ -191,15 +195,16 @@ std::unique_ptr<CFX_GlyphBitmap> CFX_GlyphCache::RenderGlyph(
   if (bmwidth > kMaxGlyphDimension || bmheight > kMaxGlyphDimension)
     return nullptr;
   int dib_width = bmwidth;
-  auto pGlyphBitmap = pdfium::MakeUnique<CFX_GlyphBitmap>(
-      FXFT_Get_Glyph_BitmapLeft(GetFaceRec()),
-      FXFT_Get_Glyph_BitmapTop(GetFaceRec()));
-  pGlyphBitmap->GetBitmap()->Create(
-      dib_width, bmheight,
-      anti_alias == FT_RENDER_MODE_MONO ? FXDIB_1bppMask : FXDIB_8bppMask);
+  auto pGlyphBitmap =
+      std::make_unique<CFX_GlyphBitmap>(FXFT_Get_Glyph_BitmapLeft(GetFaceRec()),
+                                        FXFT_Get_Glyph_BitmapTop(GetFaceRec()));
+  pGlyphBitmap->GetBitmap()->Create(dib_width, bmheight,
+                                    anti_alias == FT_RENDER_MODE_MONO
+                                        ? FXDIB_Format::k1bppMask
+                                        : FXDIB_Format::k8bppMask);
   int dest_pitch = pGlyphBitmap->GetBitmap()->GetPitch();
   int src_pitch = FXFT_Get_Bitmap_Pitch(FXFT_Get_Glyph_Bitmap(GetFaceRec()));
-  uint8_t* pDestBuf = pGlyphBitmap->GetBitmap()->GetBuffer();
+  uint8_t* pDestBuf = pGlyphBitmap->GetBitmap()->GetBuffer().data();
   uint8_t* pSrcBuf = static_cast<uint8_t*>(
       FXFT_Get_Bitmap_Buffer(FXFT_Get_Glyph_Bitmap(GetFaceRec())));
   if (anti_alias != FT_RENDER_MODE_MONO &&
@@ -223,9 +228,9 @@ std::unique_ptr<CFX_GlyphBitmap> CFX_GlyphCache::RenderGlyph(
   return pGlyphBitmap;
 }
 
-const CFX_PathData* CFX_GlyphCache::LoadGlyphPath(const CFX_Font* pFont,
-                                                  uint32_t glyph_index,
-                                                  uint32_t dest_width) {
+const CFX_Path* CFX_GlyphCache::LoadGlyphPath(const CFX_Font* pFont,
+                                              uint32_t glyph_index,
+                                              int dest_width) {
   if (!GetFaceRec() || glyph_index == kInvalidGlyphIndex)
     return nullptr;
 
@@ -239,33 +244,33 @@ const CFX_PathData* CFX_GlyphCache::LoadGlyphPath(const CFX_Font* pFont,
   if (it != m_PathMap.end())
     return it->second.get();
 
-  CFX_PathData* pGlyphPath = pFont->LoadGlyphPathImpl(glyph_index, dest_width);
-  m_PathMap[key] = std::unique_ptr<CFX_PathData>(pGlyphPath);
-  return pGlyphPath;
+  m_PathMap[key] = pFont->LoadGlyphPathImpl(glyph_index, dest_width);
+  return m_PathMap[key].get();
 }
 
-const CFX_GlyphBitmap* CFX_GlyphCache::LoadGlyphBitmap(const CFX_Font* pFont,
-                                                       uint32_t glyph_index,
-                                                       bool bFontStyle,
-                                                       const CFX_Matrix& matrix,
-                                                       uint32_t dest_width,
-                                                       int anti_alias,
-                                                       int* pTextFlags) {
+const CFX_GlyphBitmap* CFX_GlyphCache::LoadGlyphBitmap(
+    const CFX_Font* pFont,
+    uint32_t glyph_index,
+    bool bFontStyle,
+    const CFX_Matrix& matrix,
+    int dest_width,
+    int anti_alias,
+    CFX_TextRenderOptions* text_options) {
   if (glyph_index == kInvalidGlyphIndex)
     return nullptr;
 
   UniqueKeyGen keygen;
-#if defined(OS_MACOSX)
-  const bool bNative = !(*pTextFlags & FXTEXT_NO_NATIVETEXT);
+#if BUILDFLAG(IS_APPLE)
+  const bool bNative = text_options->native_text;
 #else
   const bool bNative = false;
 #endif
   GenKey(&keygen, pFont, matrix, dest_width, anti_alias, bNative);
   ByteString FaceGlyphsKey(keygen.key_, keygen.key_len_);
 
-#if defined(OS_MACOSX) && !defined _SKIA_SUPPORT_ && \
-    !defined _SKIA_SUPPORT_PATHS_
-  const bool bDoLookUp = !!(*pTextFlags & FXTEXT_NO_NATIVETEXT);
+#if BUILDFLAG(IS_APPLE)
+  const bool bDoLookUp = !text_options->native_text ||
+                         CFX_DefaultRenderDevice::SkiaIsDefaultRenderer();
 #else
   const bool bDoLookUp = true;
 #endif
@@ -274,8 +279,9 @@ const CFX_GlyphBitmap* CFX_GlyphCache::LoadGlyphBitmap(const CFX_Font* pFont,
                              bFontStyle, dest_width, anti_alias);
   }
 
-#if defined(OS_MACOSX) && !defined _SKIA_SUPPORT_ && \
-    !defined _SKIA_SUPPORT_PATHS_
+#if BUILDFLAG(IS_APPLE)
+  DCHECK(!CFX_DefaultRenderDevice::SkiaIsDefaultRenderer());
+
   std::unique_ptr<CFX_GlyphBitmap> pGlyphBitmap;
   auto it = m_SizeMap.find(FaceGlyphsKey);
   if (it != m_SizeMap.end()) {
@@ -306,34 +312,44 @@ const CFX_GlyphBitmap* CFX_GlyphCache::LoadGlyphBitmap(const CFX_Font* pFont,
   }
   GenKey(&keygen, pFont, matrix, dest_width, anti_alias, /*bNative=*/false);
   ByteString FaceGlyphsKey2(keygen.key_, keygen.key_len_);
-  *pTextFlags |= FXTEXT_NO_NATIVETEXT;
+  text_options->native_text = false;
   return LookUpGlyphBitmap(pFont, matrix, FaceGlyphsKey2, glyph_index,
                            bFontStyle, dest_width, anti_alias);
-#endif
+#endif  // BUILDFLAG(IS_APPLE)
 }
 
-#if defined _SKIA_SUPPORT_ || defined _SKIA_SUPPORT_PATHS_
+int CFX_GlyphCache::GetGlyphWidth(const CFX_Font* font,
+                                  uint32_t glyph_index,
+                                  int dest_width,
+                                  int weight) {
+  const WidthMapKey key = std::make_tuple(glyph_index, dest_width, weight);
+  auto it = m_WidthMap.find(key);
+  if (it != m_WidthMap.end()) {
+    return it->second;
+  }
+
+  m_WidthMap[key] = font->GetGlyphWidthImpl(glyph_index, dest_width, weight);
+  return m_WidthMap[key];
+}
+
+#if defined(_SKIA_SUPPORT_)
 CFX_TypeFace* CFX_GlyphCache::GetDeviceCache(const CFX_Font* pFont) {
   if (!m_pTypeface) {
     pdfium::span<const uint8_t> span = pFont->GetFontSpan();
     m_pTypeface = SkTypeface::MakeFromStream(
-        pdfium::MakeUnique<SkMemoryStream>(span.data(), span.size()));
+        std::make_unique<SkMemoryStream>(span.data(), span.size()));
   }
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   if (!m_pTypeface) {
     sk_sp<SkFontMgr> customMgr(SkFontMgr_New_Custom_Empty());
     pdfium::span<const uint8_t> span = pFont->GetFontSpan();
     m_pTypeface = customMgr->makeFromStream(
-        pdfium::MakeUnique<SkMemoryStream>(span.data(), span.size()));
+        std::make_unique<SkMemoryStream>(span.data(), span.size()));
   }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
   return m_pTypeface.get();
 }
-#endif  // defined _SKIA_SUPPORT_ || defined _SKIA_SUPPORT_PATHS_
-
-#if !defined(OS_MACOSX)
-void CFX_GlyphCache::InitPlatform() {}
-#endif
+#endif  // defined(_SKIA_SUPPORT_)
 
 CFX_GlyphBitmap* CFX_GlyphCache::LookUpGlyphBitmap(
     const CFX_Font* pFont,
@@ -341,7 +357,7 @@ CFX_GlyphBitmap* CFX_GlyphCache::LookUpGlyphBitmap(
     const ByteString& FaceGlyphsKey,
     uint32_t glyph_index,
     bool bFontStyle,
-    uint32_t dest_width,
+    int dest_width,
     int anti_alias) {
   SizeGlyphCache* pSizeCache;
   auto it = m_SizeMap.find(FaceGlyphsKey);

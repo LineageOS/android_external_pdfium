@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,7 +25,6 @@
 #include <vector>
 
 #include "fxbarcode/common/reedsolomon/BC_ReedSolomonGF256Poly.h"
-#include "third_party/base/ptr_util.h"
 
 CBC_ReedSolomonGF256::CBC_ReedSolomonGF256(int32_t primitive) {
   int32_t x = 1;
@@ -43,13 +42,13 @@ CBC_ReedSolomonGF256::CBC_ReedSolomonGF256(int32_t primitive) {
 }
 
 void CBC_ReedSolomonGF256::Init() {
-  m_zero = pdfium::MakeUnique<CBC_ReedSolomonGF256Poly>(
-      this, std::vector<int32_t>{0});
-  m_one = pdfium::MakeUnique<CBC_ReedSolomonGF256Poly>(this,
-                                                       std::vector<int32_t>{1});
+  m_zero =
+      std::make_unique<CBC_ReedSolomonGF256Poly>(this, std::vector<int32_t>{0});
+  m_one =
+      std::make_unique<CBC_ReedSolomonGF256Poly>(this, std::vector<int32_t>{1});
 }
 
-CBC_ReedSolomonGF256::~CBC_ReedSolomonGF256() {}
+CBC_ReedSolomonGF256::~CBC_ReedSolomonGF256() = default;
 
 std::unique_ptr<CBC_ReedSolomonGF256Poly> CBC_ReedSolomonGF256::BuildMonomial(
     int32_t degree,
@@ -62,7 +61,7 @@ std::unique_ptr<CBC_ReedSolomonGF256Poly> CBC_ReedSolomonGF256::BuildMonomial(
 
   std::vector<int32_t> coefficients(degree + 1);
   coefficients[0] = coefficient;
-  return pdfium::MakeUnique<CBC_ReedSolomonGF256Poly>(this, coefficients);
+  return std::make_unique<CBC_ReedSolomonGF256Poly>(this, coefficients);
 }
 
 // static
@@ -74,9 +73,9 @@ int32_t CBC_ReedSolomonGF256::Exp(int32_t a) {
   return m_expTable[a];
 }
 
-Optional<int32_t> CBC_ReedSolomonGF256::Inverse(int32_t a) {
+absl::optional<int32_t> CBC_ReedSolomonGF256::Inverse(int32_t a) {
   if (a == 0)
-    return {};
+    return absl::nullopt;
   return m_expTable[255 - m_logTable[a]];
 }
 

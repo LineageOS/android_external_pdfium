@@ -23,6 +23,7 @@ cc_library_static {
         "cfx_unicodeencodingex.cpp",
         // is_win
         "dib/cfx_dibextractor.cpp",
+        "cfx_windowsrenderdevice.cpp",
         // is_linux
         "fx_ge_linux.cpp",
     ],
