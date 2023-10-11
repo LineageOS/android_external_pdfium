@@ -19,6 +19,8 @@
 #include "agg_basics.h"
 #include "core/fxcrt/fx_memory.h"  // For FXSYS_* macros.
 
+namespace pdfium
+{
 namespace agg
 {
 template <class T>
@@ -126,7 +128,7 @@ void pod_array<T>::resize(unsigned new_size)
 {
     if(new_size > m_size) {
         if(new_size > m_capacity) {
-            T* data = FX_Alloc(T, new_size);
+            T* data = FX_AllocUninit(T, new_size);
             memcpy(data, m_array, m_size * sizeof(T));
             FX_Free(m_array);
             m_array = data;
@@ -318,7 +320,7 @@ pod_deque<T, S>::pod_deque(const pod_deque<T, S>& v) :
 {
     unsigned i;
     for(i = 0; i < v.m_num_blocks; ++i) {
-        m_blocks[i] = FX_Alloc(T, block_size);
+        m_blocks[i] = FX_AllocUninit(T, block_size);
         memcpy(m_blocks[i], v.m_blocks[i], block_size * sizeof(T));
     }
 }
@@ -499,4 +501,5 @@ template<class T> inline void swap_elements(T& a, T& b)
     b = temp;
 }
 }
+}  // namespace pdfium
 #endif

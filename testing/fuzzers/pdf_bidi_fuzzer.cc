@@ -1,28 +1,30 @@
-// Copyright 2018 The PDFium Authors. All rights reserved.
+// Copyright 2018 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <cstdint>
+#include <memory>
 
+#include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/widestring.h"
 #include "core/fxge/cfx_font.h"
 #include "core/fxge/fx_font.h"
-#include "third_party/base/ptr_util.h"
-#include "xfa/fgas/font/cfgas_fontmgr.h"
 #include "xfa/fgas/font/cfgas_gefont.h"
-#include "xfa/fgas/layout/cfx_char.h"
-#include "xfa/fgas/layout/cfx_rtfbreak.h"
+#include "xfa/fgas/layout/cfgas_char.h"
+#include "xfa/fgas/layout/cfgas_rtfbreak.h"
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
-  auto fontmgr = pdfium::MakeUnique<CFGAS_FontMgr>();
+  if (size > 8192)
+    return 0;
 
-  auto font = pdfium::MakeUnique<CFX_Font>();
-  font->LoadSubst("Arial", true, 0, FXFONT_FW_NORMAL, 0, 0, 0);
+  auto font = std::make_unique<CFX_Font>();
+  font->LoadSubst("Arial", true, 0, FXFONT_FW_NORMAL, 0, FX_CodePage::kDefANSI,
+                  0);
   assert(font);
 
-  CFX_RTFBreak rtf_break(FX_LAYOUTSTYLE_ExpandTab);
+  CFGAS_RTFBreak rtf_break(CFGAS_Break::LayoutStyle::kExpandTab);
   rtf_break.SetLineBreakTolerance(1);
-  rtf_break.SetFont(CFGAS_GEFont::LoadFont(std::move(font), fontmgr.get()));
+  rtf_break.SetFont(CFGAS_GEFont::LoadFont(std::move(font)));
   rtf_break.SetFontSize(12);
 
   WideString input =
@@ -31,8 +33,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   for (wchar_t ch : input)
     rtf_break.AppendChar(ch);
 
-  std::vector<CFX_Char> chars =
+  std::vector<CFGAS_Char> chars =
       rtf_break.GetCurrentLineForTesting()->m_LineChars;
-  CFX_Char::BidiLine(&chars, chars.size());
+  CFGAS_Char::BidiLine(&chars, chars.size());
   return 0;
 }

@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,12 +11,17 @@
 
 class CXFA_Button final : public CXFA_Node {
  public:
-  CXFA_Button(CXFA_Document* doc, XFA_PacketType packet);
+  static CXFA_Button* FromNode(CXFA_Node* pNode);
+
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_Button() override;
 
   XFA_FFWidgetType GetDefaultFFWidgetType() const override;
 
   XFA_AttributeValue GetHighlight();
+
+ private:
+  CXFA_Button(CXFA_Document* doc, XFA_PacketType packet);
 };
 
 #endif  // XFA_FXFA_PARSER_CXFA_BUTTON_H_

@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,18 @@
 
 #include "fpdfsdk/pwl/cpwl_wnd.h"
 
-#include <map>
 #include <sstream>
 #include <utility>
 #include <vector>
 
+#include "build/build_config.h"
+#include "core/fxcrt/stl_util.h"
 #include "core/fxge/cfx_renderdevice.h"
 #include "fpdfsdk/pwl/cpwl_scroll_bar.h"
 #include "public/fpdf_fwlevent.h"
-#include "third_party/base/ptr_util.h"
-#include "third_party/base/stl_util.h"
+#include "third_party/base/check.h"
+#include "third_party/base/check_op.h"
+#include "third_party/base/containers/contains.h"
 
 namespace {
 
@@ -23,8 +25,22 @@ constexpr float kDefaultFontSize = 9.0f;
 
 }  // namespace
 
-CPWL_Wnd::CreateParams::CreateParams()
-    : fFontSize(kDefaultFontSize), sDash(3, 0, 0) {}
+// static
+const CFX_Color CPWL_Wnd::kDefaultBlackColor =
+    CFX_Color(CFX_Color::Type::kGray, 0);
+
+// static
+const CFX_Color CPWL_Wnd::kDefaultWhiteColor =
+    CFX_Color(CFX_Color::Type::kGray, 1);
+
+CPWL_Wnd::CreateParams::CreateParams(CFX_Timer::HandlerIface* timer_handler,
+                                     IPWL_FillerNotify* filler_notify,
+                                     ProviderIface* provider)
+    : pTimerHandler(timer_handler),
+      pFillerNotify(filler_notify),
+      pProvider(provider),
+      fFontSize(kDefaultFontSize),
+      sDash(3, 0, 0) {}
 
 CPWL_Wnd::CreateParams::CreateParams(const CreateParams& other) = default;
 
@@ -32,15 +48,15 @@ CPWL_Wnd::CreateParams::~CreateParams() = default;
 
 class CPWL_MsgControl final : public Observable {
  public:
-  explicit CPWL_MsgControl(CPWL_Wnd* pWnd) : m_pCreatedWnd(pWnd) {}
-  ~CPWL_MsgControl() {}
+  explicit CPWL_MsgControl(const CPWL_Wnd* pWnd) : m_pCreatedWnd(pWnd) {}
+  ~CPWL_MsgControl() = default;
 
   bool IsWndCreated(const CPWL_Wnd* pWnd) const {
     return m_pCreatedWnd == pWnd;
   }
 
   bool IsWndCaptureMouse(const CPWL_Wnd* pWnd) const {
-    return pWnd && pdfium::ContainsValue(m_aMousePath, pWnd);
+    return pWnd && pdfium::Contains(m_MousePaths, pWnd);
   }
 
   bool IsMainCaptureKeyboard(const CPWL_Wnd* pWnd) const {
@@ -48,84 +64,82 @@ class CPWL_MsgControl final : public Observable {
   }
 
   bool IsWndCaptureKeyboard(const CPWL_Wnd* pWnd) const {
-    return pWnd && pdfium::ContainsValue(m_aKeyboardPath, pWnd);
+    return pWnd && pdfium::Contains(m_KeyboardPaths, pWnd);
   }
 
   void SetFocus(CPWL_Wnd* pWnd) {
-    m_aKeyboardPath.clear();
-    if (!pWnd)
-      return;
-
+    m_KeyboardPaths = pWnd->GetAncestors();
     m_pMainKeyboardWnd = pWnd;
-    CPWL_Wnd* pParent = pWnd;
-    while (pParent) {
-      m_aKeyboardPath.push_back(pParent);
-      pParent = pParent->GetParentWindow();
-    }
+
     // Note, pWnd may get destroyed in the OnSetFocus call.
     pWnd->OnSetFocus();
   }
 
   void KillFocus() {
     ObservedPtr<CPWL_MsgControl> observed_ptr(this);
-    if (!m_aKeyboardPath.empty())
-      if (CPWL_Wnd* pWnd = m_aKeyboardPath[0])
+    if (!m_KeyboardPaths.empty()) {
+      CPWL_Wnd* pWnd = m_KeyboardPaths.front();
+      if (pWnd)
         pWnd->OnKillFocus();
+    }
     if (!observed_ptr)
       return;
 
     m_pMainKeyboardWnd = nullptr;
-    m_aKeyboardPath.clear();
+    m_KeyboardPaths.clear();
   }
 
-  void SetCapture(CPWL_Wnd* pWnd) {
-    m_aMousePath.clear();
-    if (pWnd) {
-      CPWL_Wnd* pParent = pWnd;
-      while (pParent) {
-        m_aMousePath.push_back(pParent);
-        pParent = pParent->GetParentWindow();
-      }
-    }
-  }
+  void SetCapture(CPWL_Wnd* pWnd) { m_MousePaths = pWnd->GetAncestors(); }
 
-  void ReleaseCapture() { m_aMousePath.clear(); }
-
-  CPWL_Wnd* GetFocusedWindow() const { return m_pMainKeyboardWnd.Get(); }
+  void ReleaseCapture() { m_MousePaths.clear(); }
 
  private:
-  std::vector<CPWL_Wnd*> m_aMousePath;
-  std::vector<CPWL_Wnd*> m_aKeyboardPath;
-  UnownedPtr<CPWL_Wnd> m_pCreatedWnd;
-  UnownedPtr<CPWL_Wnd> m_pMainKeyboardWnd;
+  std::vector<UnownedPtr<CPWL_Wnd>> m_MousePaths;
+  std::vector<UnownedPtr<CPWL_Wnd>> m_KeyboardPaths;
+  UnownedPtr<const CPWL_Wnd> m_pCreatedWnd;
+  UnownedPtr<const CPWL_Wnd> m_pMainKeyboardWnd;
 };
 
 // static
-bool CPWL_Wnd::IsSHIFTKeyDown(uint32_t nFlag) {
+bool CPWL_Wnd::IsSHIFTKeyDown(Mask<FWL_EVENTFLAG> nFlag) {
   return !!(nFlag & FWL_EVENTFLAG_ShiftKey);
 }
 
 // static
-bool CPWL_Wnd::IsCTRLKeyDown(uint32_t nFlag) {
+bool CPWL_Wnd::IsCTRLKeyDown(Mask<FWL_EVENTFLAG> nFlag) {
   return !!(nFlag & FWL_EVENTFLAG_ControlKey);
 }
 
 // static
-bool CPWL_Wnd::IsALTKeyDown(uint32_t nFlag) {
+bool CPWL_Wnd::IsALTKeyDown(Mask<FWL_EVENTFLAG> nFlag) {
   return !!(nFlag & FWL_EVENTFLAG_AltKey);
+}
+
+// static
+bool CPWL_Wnd::IsMETAKeyDown(Mask<FWL_EVENTFLAG> nFlag) {
+  return !!(nFlag & FWL_EVENTFLAG_MetaKey);
+}
+
+// static
+bool CPWL_Wnd::IsPlatformShortcutKey(Mask<FWL_EVENTFLAG> nFlag) {
+#if BUILDFLAG(IS_APPLE)
+  return IsMETAKeyDown(nFlag);
+#else
+  return IsCTRLKeyDown(nFlag);
+#endif
 }
 
 CPWL_Wnd::CPWL_Wnd(
     const CreateParams& cp,
-    std::unique_ptr<IPWL_SystemHandler::PerWindowData> pAttachedData)
+    std::unique_ptr<IPWL_FillerNotify::PerWindowData> pAttachedData)
     : m_CreationParams(cp), m_pAttachedData(std::move(pAttachedData)) {}
 
 CPWL_Wnd::~CPWL_Wnd() {
-  ASSERT(!m_bCreated);
+  DCHECK(!m_bCreated);
 }
 
 void CPWL_Wnd::Realize() {
-  ASSERT(!m_bCreated);
+  DCHECK(!m_bCreated);
 
   m_CreationParams.rcRectWnd.Normalize();
   m_rcWindow = m_CreationParams.rcRectWnd;
@@ -151,11 +165,6 @@ void CPWL_Wnd::Realize() {
 void CPWL_Wnd::OnCreated() {}
 
 void CPWL_Wnd::OnDestroy() {}
-
-void CPWL_Wnd::InvalidateFocusHandler(FocusHandlerIface* handler) {
-  if (m_CreationParams.pFocusHandler == handler)
-    m_CreationParams.pFocusHandler = nullptr;
-}
 
 void CPWL_Wnd::InvalidateProvider(ProviderIface* provider) {
   if (m_CreationParams.pProvider.Get() == provider)
@@ -241,17 +250,11 @@ void CPWL_Wnd::DrawThisAppearance(CFX_RenderDevice* pDevice,
 void CPWL_Wnd::DrawChildAppearance(CFX_RenderDevice* pDevice,
                                    const CFX_Matrix& mtUser2Device) {
   for (const auto& pChild : m_Children) {
-    CFX_Matrix mt = pChild->GetChildMatrix();
-    if (mt.IsIdentity()) {
-      pChild->DrawAppearance(pDevice, mtUser2Device);
-      continue;
-    }
-    mt.Concat(mtUser2Device);
-    pChild->DrawAppearance(pDevice, mt);
+    pChild->DrawAppearance(pDevice, mtUser2Device);
   }
 }
 
-bool CPWL_Wnd::InvalidateRect(CFX_FloatRect* pRect) {
+bool CPWL_Wnd::InvalidateRect(const CFX_FloatRect* pRect) {
   if (!IsValid())
     return true;
 
@@ -266,49 +269,56 @@ bool CPWL_Wnd::InvalidateRect(CFX_FloatRect* pRect) {
   CFX_FloatRect rcWin = PWLtoWnd(rcRefresh);
   rcWin.Inflate(1, 1);
   rcWin.Normalize();
-  GetSystemHandler()->InvalidateRect(m_pAttachedData.get(), rcWin);
+  GetFillerNotify()->InvalidateRect(m_pAttachedData.get(), rcWin);
   return !!thisObserved;
 }
 
-#define PWL_IMPLEMENT_KEY_METHOD(key_method_name)                  \
-  bool CPWL_Wnd::key_method_name(uint16_t nChar, uint32_t nFlag) { \
-    if (!IsValid() || !IsVisible() || !IsEnabled())                \
-      return false;                                                \
-    if (!IsWndCaptureKeyboard(this))                               \
-      return false;                                                \
-    for (const auto& pChild : m_Children) {                        \
-      if (IsWndCaptureKeyboard(pChild.get()))                      \
-        return pChild->key_method_name(nChar, nFlag);              \
-    }                                                              \
-    return false;                                                  \
+bool CPWL_Wnd::OnKeyDown(FWL_VKEYCODE nKeyCode, Mask<FWL_EVENTFLAG> nFlag) {
+  if (!IsValid() || !IsVisible())
+    return false;
+  if (!IsWndCaptureKeyboard(this))
+    return false;
+  for (const auto& pChild : m_Children) {
+    if (IsWndCaptureKeyboard(pChild.get()))
+      return pChild->OnKeyDown(nKeyCode, nFlag);
   }
+  return false;
+}
 
-PWL_IMPLEMENT_KEY_METHOD(OnKeyDown)
-PWL_IMPLEMENT_KEY_METHOD(OnChar)
-#undef PWL_IMPLEMENT_KEY_METHOD
+bool CPWL_Wnd::OnChar(uint16_t nChar, Mask<FWL_EVENTFLAG> nFlag) {
+  if (!IsValid() || !IsVisible())
+    return false;
+  if (!IsWndCaptureKeyboard(this))
+    return false;
+  for (const auto& pChild : m_Children) {
+    if (IsWndCaptureKeyboard(pChild.get()))
+      return pChild->OnChar(nChar, nFlag);
+  }
+  return false;
+}
 
-#define PWL_IMPLEMENT_MOUSE_METHOD(mouse_method_name)                          \
-  bool CPWL_Wnd::mouse_method_name(const CFX_PointF& point, uint32_t nFlag) {  \
-    if (!IsValid() || !IsVisible() || !IsEnabled())                            \
-      return false;                                                            \
-    if (IsWndCaptureMouse(this)) {                                             \
-      for (const auto& pChild : m_Children) {                                  \
-        if (IsWndCaptureMouse(pChild.get())) {                                 \
-          return pChild->mouse_method_name(pChild->ParentToChild(point),       \
-                                           nFlag);                             \
-        }                                                                      \
-      }                                                                        \
-      SetCursor();                                                             \
-      return false;                                                            \
-    }                                                                          \
-    for (const auto& pChild : m_Children) {                                    \
-      if (pChild->WndHitTest(pChild->ParentToChild(point))) {                  \
-        return pChild->mouse_method_name(pChild->ParentToChild(point), nFlag); \
-      }                                                                        \
-    }                                                                          \
-    if (WndHitTest(point))                                                     \
-      SetCursor();                                                             \
-    return false;                                                              \
+#define PWL_IMPLEMENT_MOUSE_METHOD(mouse_method_name)         \
+  bool CPWL_Wnd::mouse_method_name(Mask<FWL_EVENTFLAG> nFlag, \
+                                   const CFX_PointF& point) { \
+    if (!IsValid() || !IsVisible())                           \
+      return false;                                           \
+    if (IsWndCaptureMouse(this)) {                            \
+      for (const auto& pChild : m_Children) {                 \
+        if (IsWndCaptureMouse(pChild.get())) {                \
+          return pChild->mouse_method_name(nFlag, point);     \
+        }                                                     \
+      }                                                       \
+      SetCursor();                                            \
+      return false;                                           \
+    }                                                         \
+    for (const auto& pChild : m_Children) {                   \
+      if (pChild->WndHitTest(point)) {                        \
+        return pChild->mouse_method_name(nFlag, point);       \
+      }                                                       \
+    }                                                         \
+    if (WndHitTest(point))                                    \
+      SetCursor();                                            \
+    return false;                                             \
   }
 
 PWL_IMPLEMENT_MOUSE_METHOD(OnLButtonDblClk)
@@ -318,11 +328,12 @@ PWL_IMPLEMENT_MOUSE_METHOD(OnMouseMove)
 #undef PWL_IMPLEMENT_MOUSE_METHOD
 
 // Unlike their FWL counterparts, PWL windows don't handle right clicks.
-bool CPWL_Wnd::OnRButtonDown(const CFX_PointF& point, uint32_t nFlag) {
+bool CPWL_Wnd::OnRButtonDown(Mask<FWL_EVENTFLAG> nFlag,
+                             const CFX_PointF& point) {
   return false;
 }
 
-bool CPWL_Wnd::OnRButtonUp(const CFX_PointF& point, uint32_t nFlag) {
+bool CPWL_Wnd::OnRButtonUp(Mask<FWL_EVENTFLAG> nFlag, const CFX_PointF& point) {
   return false;
 }
 
@@ -334,7 +345,13 @@ WideString CPWL_Wnd::GetSelectedText() {
   return WideString();
 }
 
+void CPWL_Wnd::ReplaceAndKeepSelection(const WideString& text) {}
+
 void CPWL_Wnd::ReplaceSelection(const WideString& text) {}
+
+bool CPWL_Wnd::SelectAllText() {
+  return false;
+}
 
 bool CPWL_Wnd::CanUndo() {
   return false;
@@ -352,10 +369,10 @@ bool CPWL_Wnd::Redo() {
   return false;
 }
 
-bool CPWL_Wnd::OnMouseWheel(short zDelta,
+bool CPWL_Wnd::OnMouseWheel(Mask<FWL_EVENTFLAG> nFlag,
                             const CFX_PointF& point,
-                            uint32_t nFlag) {
-  if (!IsValid() || !IsVisible() || !IsEnabled())
+                            const CFX_Vector& delta) {
+  if (!IsValid() || !IsVisible())
     return false;
 
   SetCursor();
@@ -364,21 +381,21 @@ bool CPWL_Wnd::OnMouseWheel(short zDelta,
 
   for (const auto& pChild : m_Children) {
     if (IsWndCaptureKeyboard(pChild.get()))
-      return pChild->OnMouseWheel(zDelta, pChild->ParentToChild(point), nFlag);
+      return pChild->OnMouseWheel(nFlag, point, delta);
   }
   return false;
 }
 
 void CPWL_Wnd::AddChild(std::unique_ptr<CPWL_Wnd> pWnd) {
-  ASSERT(!pWnd->m_pParent);
+  DCHECK(!pWnd->m_pParent);
   pWnd->m_pParent = this;
   m_Children.push_back(std::move(pWnd));
 }
 
 void CPWL_Wnd::RemoveChild(CPWL_Wnd* pWnd) {
-  ASSERT(pWnd->m_pParent == this);
-  auto it = std::find(m_Children.begin(), m_Children.end(),
-                      pdfium::FakeUniquePtr<CPWL_Wnd>(pWnd));
+  DCHECK_EQ(pWnd->m_pParent, this);
+  auto it =
+      std::find(m_Children.begin(), m_Children.end(), MakeFakeUniquePtr(pWnd));
   if (it == m_Children.end())
     return;
 
@@ -429,16 +446,8 @@ void CPWL_Wnd::RemoveFlag(uint32_t dwFlags) {
   m_CreationParams.dwFlags &= ~dwFlags;
 }
 
-void CPWL_Wnd::AddFlag(uint32_t dwFlags) {
-  m_CreationParams.dwFlags |= dwFlags;
-}
-
 CFX_Color CPWL_Wnd::GetBackgroundColor() const {
   return m_CreationParams.sBackgroundColor;
-}
-
-void CPWL_Wnd::SetBackgroundColor(const CFX_Color& color) {
-  m_CreationParams.sBackgroundColor = color;
 }
 
 CFX_Color CPWL_Wnd::GetTextColor() const {
@@ -447,11 +456,6 @@ CFX_Color CPWL_Wnd::GetTextColor() const {
 
 BorderStyle CPWL_Wnd::GetBorderStyle() const {
   return m_CreationParams.nBorderStyle;
-}
-
-void CPWL_Wnd::SetBorderStyle(BorderStyle nBorderStyle) {
-  if (HasFlag(PWS_BORDER))
-    m_CreationParams.nBorderStyle = nBorderStyle;
 }
 
 int32_t CPWL_Wnd::GetBorderWidth() const {
@@ -471,7 +475,7 @@ const CPWL_Dash& CPWL_Wnd::GetBorderDash() const {
 }
 
 CPWL_ScrollBar* CPWL_Wnd::GetVScrollBar() const {
-  return HasFlag(PWS_VSCROLL) ? m_pVScrollBar.Get() : nullptr;
+  return HasFlag(PWS_VSCROLL) ? m_pVScrollBar : nullptr;
 }
 
 void CPWL_Wnd::CreateScrollBar(const CreateParams& cp) {
@@ -483,14 +487,12 @@ void CPWL_Wnd::CreateVScrollBar(const CreateParams& cp) {
     return;
 
   CreateParams scp = cp;
-  scp.dwFlags =
-      PWS_CHILD | PWS_BACKGROUND | PWS_AUTOTRANSPARENT | PWS_NOREFRESHCLIP;
-  scp.sBackgroundColor = PWL_DEFAULT_WHITECOLOR;
-  scp.eCursorType = FXCT_ARROW;
-  scp.nTransparency = PWL_SCROLLBAR_TRANSPARENCY;
+  scp.dwFlags = PWS_BACKGROUND | PWS_AUTOTRANSPARENT | PWS_NOREFRESHCLIP;
+  scp.sBackgroundColor = kDefaultWhiteColor;
+  scp.eCursorType = IPWL_FillerNotify::CursorStyle::kArrow;
+  scp.nTransparency = CPWL_ScrollBar::kTransparency;
 
-  auto pBar =
-      pdfium::MakeUnique<CPWL_ScrollBar>(scp, CloneAttachedData(), SBT_VSCROLL);
+  auto pBar = std::make_unique<CPWL_ScrollBar>(scp, CloneAttachedData());
   m_pVScrollBar = pBar.get();
   AddChild(std::move(pBar));
   m_pVScrollBar->Realize();
@@ -528,9 +530,17 @@ void CPWL_Wnd::OnSetFocus() {}
 
 void CPWL_Wnd::OnKillFocus() {}
 
-std::unique_ptr<IPWL_SystemHandler::PerWindowData> CPWL_Wnd::CloneAttachedData()
+std::unique_ptr<IPWL_FillerNotify::PerWindowData> CPWL_Wnd::CloneAttachedData()
     const {
   return m_pAttachedData ? m_pAttachedData->Clone() : nullptr;
+}
+
+std::vector<UnownedPtr<CPWL_Wnd>> CPWL_Wnd::GetAncestors() {
+  std::vector<UnownedPtr<CPWL_Wnd>> results;
+  for (CPWL_Wnd* pWnd = this; pWnd; pWnd = pWnd->GetParentWindow()) {
+    results.emplace_back(pWnd);
+  }
+  return results;
 }
 
 bool CPWL_Wnd::WndHitTest(const CFX_PointF& point) const {
@@ -588,7 +598,7 @@ bool CPWL_Wnd::RePosChildWnd() {
     rcContent.Normalize();
   }
   CFX_FloatRect rcVScroll =
-      CFX_FloatRect(rcContent.right - PWL_SCROLLBAR_WIDTH, rcContent.bottom,
+      CFX_FloatRect(rcContent.right - CPWL_ScrollBar::kWidth, rcContent.bottom,
                     rcContent.right - 1.0f, rcContent.top);
 
   ObservedPtr<CPWL_Wnd> thisObserved(this);
@@ -603,7 +613,7 @@ void CPWL_Wnd::CreateChildWnd(const CreateParams& cp) {}
 
 void CPWL_Wnd::SetCursor() {
   if (IsValid())
-    GetSystemHandler()->SetCursor(GetCreationParams()->eCursorType);
+    GetFillerNotify()->SetCursor(GetCreationParams()->eCursorType);
 }
 
 void CPWL_Wnd::CreateMsgControl() {
@@ -659,10 +669,10 @@ void CPWL_Wnd::SetFontSize(float fFontSize) {
 
 CFX_Color CPWL_Wnd::GetBorderLeftTopColor(BorderStyle nBorderStyle) const {
   switch (nBorderStyle) {
-    case BorderStyle::BEVELED:
-      return CFX_Color(CFX_Color::kGray, 1);
-    case BorderStyle::INSET:
-      return CFX_Color(CFX_Color::kGray, 0.5f);
+    case BorderStyle::kBeveled:
+      return CFX_Color(CFX_Color::Type::kGray, 1);
+    case BorderStyle::kInset:
+      return CFX_Color(CFX_Color::Type::kGray, 0.5f);
     default:
       return CFX_Color();
   }
@@ -670,10 +680,10 @@ CFX_Color CPWL_Wnd::GetBorderLeftTopColor(BorderStyle nBorderStyle) const {
 
 CFX_Color CPWL_Wnd::GetBorderRightBottomColor(BorderStyle nBorderStyle) const {
   switch (nBorderStyle) {
-    case BorderStyle::BEVELED:
+    case BorderStyle::kBeveled:
       return GetBackgroundColor() / 2.0f;
-    case BorderStyle::INSET:
-      return CFX_Color(CFX_Color::kGray, 0.75f);
+    case BorderStyle::kInset:
+      return CFX_Color(CFX_Color::Type::kGray, 0.75f);
     default:
       return CFX_Color();
   }
@@ -691,7 +701,7 @@ void CPWL_Wnd::SetTransparency(int32_t nTransparency) {
 }
 
 CFX_Matrix CPWL_Wnd::GetWindowMatrix() const {
-  CFX_Matrix mt = GetChildToRoot();
+  CFX_Matrix mt;
   if (ProviderIface* pProvider = GetProvider())
     mt.Concat(pProvider->GetWindowMatrix(GetAttachedData()));
   return mt;
@@ -700,62 +710,4 @@ CFX_Matrix CPWL_Wnd::GetWindowMatrix() const {
 CFX_FloatRect CPWL_Wnd::PWLtoWnd(const CFX_FloatRect& rect) const {
   CFX_Matrix mt = GetWindowMatrix();
   return mt.TransformRect(rect);
-}
-
-CFX_PointF CPWL_Wnd::ParentToChild(const CFX_PointF& point) const {
-  CFX_Matrix mt = GetChildMatrix();
-  if (mt.IsIdentity())
-    return point;
-
-  CFX_Matrix inverse = mt.GetInverse();
-  if (!inverse.IsIdentity())
-    mt = inverse;
-  return mt.Transform(point);
-}
-
-CFX_FloatRect CPWL_Wnd::ParentToChild(const CFX_FloatRect& rect) const {
-  CFX_Matrix mt = GetChildMatrix();
-  if (mt.IsIdentity())
-    return rect;
-
-  CFX_Matrix inverse = mt.GetInverse();
-  if (!inverse.IsIdentity())
-    mt = inverse;
-
-  return mt.TransformRect(rect);
-}
-
-CFX_Matrix CPWL_Wnd::GetChildToRoot() const {
-  CFX_Matrix mt;
-  if (HasFlag(PWS_CHILD)) {
-    const CPWL_Wnd* pParent = this;
-    while (pParent) {
-      mt.Concat(pParent->GetChildMatrix());
-      pParent = pParent->GetParentWindow();
-    }
-  }
-  return mt;
-}
-
-CFX_Matrix CPWL_Wnd::GetChildMatrix() const {
-  return HasFlag(PWS_CHILD) ? m_CreationParams.mtChild : CFX_Matrix();
-}
-
-void CPWL_Wnd::SetChildMatrix(const CFX_Matrix& mt) {
-  m_CreationParams.mtChild = mt;
-}
-
-const CPWL_Wnd* CPWL_Wnd::GetFocused() const {
-  CPWL_MsgControl* pMsgCtrl = GetMsgControl();
-  return pMsgCtrl ? pMsgCtrl->GetFocusedWindow() : nullptr;
-}
-
-void CPWL_Wnd::EnableWindow(bool bEnable) {
-  if (m_bEnabled == bEnable)
-    return;
-
-  for (const auto& pChild : m_Children)
-    pChild->EnableWindow(bEnable);
-
-  m_bEnabled = bEnable;
 }

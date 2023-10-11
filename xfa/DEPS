@@ -1,7 +1,7 @@
 include_rules = [
   '+core',
   '+fxbarcode',
-
-  # xfa/fwl should be standalone. https://crbug.com/pdfium/507
+  '+fxjs/gc',
+  '+v8/include/cppgc',
   '-xfa/fwl',
 ]

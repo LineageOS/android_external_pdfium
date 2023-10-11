@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,24 @@
 
 #include "core/fpdfapi/page/cpdf_psengine.h"
 
+#include <math.h>
+
 #include <algorithm>
-#include <cmath>
 #include <limits>
 #include <utility>
 
 #include "core/fpdfapi/parser/cpdf_simple_parser.h"
 #include "core/fxcrt/fx_safe_types.h"
 #include "core/fxcrt/fx_string.h"
-#include "third_party/base/logging.h"
-#include "third_party/base/ptr_util.h"
+#include "third_party/base/check.h"
+#include "third_party/base/check_op.h"
+#include "third_party/base/notreached.h"
 
 namespace {
 
 struct PDF_PSOpName {
-  const char* name;
+  // Inline string data reduces size for small strings.
+  const char name[9];
   PDF_PSOP op;
 };
 
@@ -72,7 +75,7 @@ constexpr PDF_PSOpName kPsOpNames[] = {
 // Round half up is a nearest integer round with half-way numbers always rounded
 // up. Example: -5.5 rounds to -5.
 float RoundHalfUp(float f) {
-  if (std::isnan(f))
+  if (isnan(f))
     return 0;
   if (f > std::numeric_limits<float>::max() - 0.5f)
     return std::numeric_limits<float>::max();
@@ -82,44 +85,47 @@ float RoundHalfUp(float f) {
 }  // namespace
 
 CPDF_PSOP::CPDF_PSOP()
-    : m_op(PSOP_PROC), m_value(0), m_proc(pdfium::MakeUnique<CPDF_PSProc>()) {}
+    : m_op(PSOP_PROC), m_value(0), m_proc(std::make_unique<CPDF_PSProc>()) {}
 
 CPDF_PSOP::CPDF_PSOP(PDF_PSOP op) : m_op(op), m_value(0) {
-  ASSERT(m_op != PSOP_CONST);
-  ASSERT(m_op != PSOP_PROC);
+  DCHECK(m_op != PSOP_CONST);
+  DCHECK(m_op != PSOP_PROC);
 }
 
 CPDF_PSOP::CPDF_PSOP(float value) : m_op(PSOP_CONST), m_value(value) {}
 
-CPDF_PSOP::~CPDF_PSOP() {}
+CPDF_PSOP::~CPDF_PSOP() = default;
+
+bool CPDF_PSOP::Parse(CPDF_SimpleParser* parser, int depth) {
+  CHECK_EQ(m_op, PSOP_PROC);
+  return m_proc->Parse(parser, depth);
+}
+
+void CPDF_PSOP::Execute(CPDF_PSEngine* pEngine) {
+  CHECK_EQ(m_op, PSOP_PROC);
+  m_proc->Execute(pEngine);
+}
 
 float CPDF_PSOP::GetFloatValue() const {
   if (m_op == PSOP_CONST)
     return m_value;
 
-  NOTREACHED();
-  return 0;
-}
-
-CPDF_PSProc* CPDF_PSOP::GetProc() const {
-  if (m_op == PSOP_PROC)
-    return m_proc.get();
-  NOTREACHED();
-  return nullptr;
+  NOTREACHED_NORETURN();
 }
 
 bool CPDF_PSEngine::Execute() {
   return m_MainProc.Execute(this);
 }
 
-CPDF_PSProc::CPDF_PSProc() {}
-CPDF_PSProc::~CPDF_PSProc() {}
+CPDF_PSProc::CPDF_PSProc() = default;
+
+CPDF_PSProc::~CPDF_PSProc() = default;
 
 bool CPDF_PSProc::Parse(CPDF_SimpleParser* parser, int depth) {
   if (depth > kMaxDepth)
     return false;
 
-  while (1) {
+  while (true) {
     ByteStringView word = parser->GetWord();
     if (word.IsEmpty())
       return false;
@@ -128,8 +134,8 @@ bool CPDF_PSProc::Parse(CPDF_SimpleParser* parser, int depth) {
       return true;
 
     if (word == "{") {
-      m_Operators.push_back(pdfium::MakeUnique<CPDF_PSOP>());
-      if (!m_Operators.back()->GetProc()->Parse(parser, depth + 1))
+      m_Operators.push_back(std::make_unique<CPDF_PSOP>());
+      if (!m_Operators.back()->Parse(parser, depth + 1))
         return false;
       continue;
     }
@@ -154,14 +160,14 @@ bool CPDF_PSProc::Execute(CPDF_PSEngine* pEngine) {
         return false;
 
       if (pEngine->PopInt())
-        m_Operators[i - 1]->GetProc()->Execute(pEngine);
+        m_Operators[i - 1]->Execute(pEngine);
     } else if (op == PSOP_IFELSE) {
       if (i < 2 || m_Operators[i - 1]->GetOp() != PSOP_PROC ||
           m_Operators[i - 2]->GetOp() != PSOP_PROC) {
         return false;
       }
       size_t offset = pEngine->PopInt() ? 2 : 1;
-      m_Operators[i - offset]->GetProc()->Execute(pEngine);
+      m_Operators[i - offset]->Execute(pEngine);
     } else {
       pEngine->DoOperator(op);
     }
@@ -180,9 +186,9 @@ void CPDF_PSProc::AddOperator(ByteStringView word) {
                          return name.name < word;
                        });
   if (pFound != std::end(kPsOpNames) && pFound->name == word)
-    m_Operators.push_back(pdfium::MakeUnique<CPDF_PSOP>(pFound->op));
+    m_Operators.push_back(std::make_unique<CPDF_PSOP>(pFound->op));
   else
-    m_Operators.push_back(pdfium::MakeUnique<CPDF_PSOP>(StringToFloat(word)));
+    m_Operators.push_back(std::make_unique<CPDF_PSOP>(StringToFloat(word)));
 }
 
 CPDF_PSEngine::CPDF_PSEngine() = default;
@@ -232,7 +238,7 @@ bool CPDF_PSEngine::DoOperator(PDF_PSOP op) {
     case PSOP_DIV:
       d2 = Pop();
       d1 = Pop();
-      Push(d1 / d2);
+      Push(d2 ? d1 / d2 : 0);
       break;
     case PSOP_IDIV:
       i2 = PopInt();
@@ -286,16 +292,16 @@ bool CPDF_PSEngine::DoOperator(PDF_PSOP op) {
       break;
     case PSOP_SIN:
       d1 = Pop();
-      Push(sin(d1 * FX_PI / 180.0f));
+      Push(sin(d1 * FXSYS_PI / 180.0f));
       break;
     case PSOP_COS:
       d1 = Pop();
-      Push(cos(d1 * FX_PI / 180.0f));
+      Push(cos(d1 * FXSYS_PI / 180.0f));
       break;
     case PSOP_ATAN:
       d2 = Pop();
       d1 = Pop();
-      d1 = atan2(d1, d2) * 180.0 / FX_PI;
+      d1 = atan2(d1, d2) * 180.0 / FXSYS_PI;
       if (d1 < 0) {
         d1 += 360;
       }
@@ -304,7 +310,7 @@ bool CPDF_PSEngine::DoOperator(PDF_PSOP op) {
     case PSOP_EXP:
       d2 = Pop();
       d1 = Pop();
-      Push(FXSYS_pow(d1, d2));
+      Push(powf(d1, d2));
       break;
     case PSOP_LN:
       d1 = Pop();

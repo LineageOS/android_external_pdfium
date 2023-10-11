@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,17 @@
 #include "xfa/fxfa/parser/cxfa_draw.h"
 
 #include "fxjs/xfa/cjx_draw.h"
-#include "third_party/base/ptr_util.h"
+#include "xfa/fxfa/parser/cxfa_document.h"
 
 namespace {
 
 const CXFA_Node::PropertyData kDrawPropertyData[] = {
-    {XFA_Element::Ui, 1, 0},     {XFA_Element::Margin, 1, 0},
-    {XFA_Element::Para, 1, 0},   {XFA_Element::Border, 1, 0},
-    {XFA_Element::Assist, 1, 0}, {XFA_Element::Traversal, 1, 0},
-    {XFA_Element::Keep, 1, 0},   {XFA_Element::Caption, 1, 0},
-    {XFA_Element::Desc, 1, 0},   {XFA_Element::Font, 1, 0},
-    {XFA_Element::Value, 1, 0},  {XFA_Element::Extras, 1, 0},
+    {XFA_Element::Ui, 1, {}},     {XFA_Element::Margin, 1, {}},
+    {XFA_Element::Para, 1, {}},   {XFA_Element::Border, 1, {}},
+    {XFA_Element::Assist, 1, {}}, {XFA_Element::Traversal, 1, {}},
+    {XFA_Element::Keep, 1, {}},   {XFA_Element::Caption, 1, {}},
+    {XFA_Element::Desc, 1, {}},   {XFA_Element::Font, 1, {}},
+    {XFA_Element::Value, 1, {}},  {XFA_Element::Extras, 1, {}},
 };
 
 const CXFA_Node::AttributeData kDrawAttributeData[] = {
@@ -52,11 +52,13 @@ const CXFA_Node::AttributeData kDrawAttributeData[] = {
 CXFA_Draw::CXFA_Draw(CXFA_Document* doc, XFA_PacketType packet)
     : CXFA_Node(doc,
                 packet,
-                (XFA_XDPPACKET_Template | XFA_XDPPACKET_Form),
+                {XFA_XDPPACKET::kTemplate, XFA_XDPPACKET::kForm},
                 XFA_ObjectType::ContainerNode,
                 XFA_Element::Draw,
                 kDrawPropertyData,
                 kDrawAttributeData,
-                pdfium::MakeUnique<CJX_Draw>(this)) {}
+                cppgc::MakeGarbageCollected<CJX_Draw>(
+                    doc->GetHeap()->GetAllocationHandle(),
+                    this)) {}
 
 CXFA_Draw::~CXFA_Draw() = default;

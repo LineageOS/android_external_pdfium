@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@ class CScript_LogPseudoModel;
 // xfa_basic_data_element_script is removed.
 class CJX_LogPseudoModel final : public CJX_Object {
  public:
-  explicit CJX_LogPseudoModel(CScript_LogPseudoModel* model);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CJX_LogPseudoModel() override;
 
   // CJX_Object:
@@ -29,6 +29,8 @@ class CJX_LogPseudoModel final : public CJX_Object {
   JSE_METHOD(trace);
 
  private:
+  explicit CJX_LogPseudoModel(CScript_LogPseudoModel* model);
+
   using Type__ = CJX_LogPseudoModel;
   using ParentType__ = CJX_Object;
 

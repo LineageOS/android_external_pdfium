@@ -1,4 +1,4 @@
-// Copyright 2016 The PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -38,7 +38,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   if (decoder) {
     int line = 0;
-    while (decoder->GetScanline(line))
+    while (!decoder->GetScanline(line).empty())
       line++;
   }
 

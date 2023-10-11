@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 
 #include "xfa/fxfa/cxfa_ffcheckbutton.h"
 
-#include <utility>
-#include "third_party/base/ptr_util.h"
+#include "third_party/base/check.h"
+#include "v8/include/cppgc/visitor.h"
 #include "xfa/fwl/cfwl_checkbox.h"
 #include "xfa/fwl/cfwl_messagemouse.h"
 #include "xfa/fwl/cfwl_notedriver.h"
@@ -30,19 +30,26 @@ CXFA_FFCheckButton::CXFA_FFCheckButton(CXFA_Node* pNode,
 
 CXFA_FFCheckButton::~CXFA_FFCheckButton() = default;
 
+void CXFA_FFCheckButton::Trace(cppgc::Visitor* visitor) const {
+  CXFA_FFField::Trace(visitor);
+  visitor->Trace(m_pOldDelegate);
+  visitor->Trace(button_);
+}
+
 bool CXFA_FFCheckButton::LoadWidget() {
-  ASSERT(!IsLoaded());
-  auto pNew = pdfium::MakeUnique<CFWL_CheckBox>(GetFWLApp());
-  CFWL_CheckBox* pCheckBox = pNew.get();
-  SetNormalWidget(std::move(pNew));
+  DCHECK(!IsLoaded());
+
+  CFWL_CheckBox* pCheckBox = cppgc::MakeGarbageCollected<CFWL_CheckBox>(
+      GetFWLApp()->GetHeap()->GetAllocationHandle(), GetFWLApp());
+  SetNormalWidget(pCheckBox);
   pCheckBox->SetAdapterIface(this);
 
-  CFWL_NoteDriver* pNoteDriver = pCheckBox->GetOwnerApp()->GetNoteDriver();
+  CFWL_NoteDriver* pNoteDriver = pCheckBox->GetFWLApp()->GetNoteDriver();
   pNoteDriver->RegisterEventTarget(pCheckBox, pCheckBox);
   m_pOldDelegate = pCheckBox->GetDelegate();
   pCheckBox->SetDelegate(this);
   if (m_pNode->IsRadioButton())
-    pCheckBox->ModifyStylesEx(FWL_STYLEEXT_CKB_RadioButton, 0xFFFFFFFF);
+    pCheckBox->ModifyStyleExts(FWL_STYLEEXT_CKB_RadioButton, 0xFFFFFFFF);
 
   {
     CFWL_Widget::ScopedUpdateLock update_lock(pCheckBox);
@@ -86,7 +93,7 @@ void CXFA_FFCheckButton::UpdateWidgetProperty() {
   if (button_->IsAllowNeutral())
     dwStyleEx |= FWL_STYLEEXT_CKB_3State;
 
-  pCheckBox->ModifyStylesEx(
+  pCheckBox->ModifyStyleExts(
       dwStyleEx, FWL_STYLEEXT_CKB_SignShapeMask | FWL_STYLEEXT_CKB_3State);
 }
 
@@ -102,7 +109,7 @@ bool CXFA_FFCheckButton::PerformLayout() {
   float fCapReserve = 0;
   CXFA_Caption* caption = m_pNode->GetCaptionIfExists();
   if (caption && caption->IsVisible()) {
-    m_rtCaption = rtWidget;
+    m_CaptionRect = rtWidget;
     iCapPlacement = caption->GetPlacementType();
     fCapReserve = caption->GetReserve();
     if (fCapReserve <= 0) {
@@ -123,35 +130,35 @@ bool CXFA_FFCheckButton::PerformLayout() {
     iVertAlign = para->GetVerticalAlign();
   }
 
-  m_rtUI = rtWidget;
+  m_UIRect = rtWidget;
   CXFA_Margin* captionMargin = caption ? caption->GetMarginIfExists() : nullptr;
   switch (iCapPlacement) {
     case XFA_AttributeValue::Left: {
-      m_rtCaption.width = fCapReserve;
+      m_CaptionRect.width = fCapReserve;
       CapLeftRightPlacement(captionMargin);
-      m_rtUI.width -= fCapReserve;
-      m_rtUI.left += fCapReserve;
+      m_UIRect.width -= fCapReserve;
+      m_UIRect.left += fCapReserve;
       break;
     }
     case XFA_AttributeValue::Top: {
-      m_rtCaption.height = fCapReserve;
-      XFA_RectWithoutMargin(&m_rtCaption, captionMargin);
-      m_rtUI.height -= fCapReserve;
-      m_rtUI.top += fCapReserve;
+      m_CaptionRect.height = fCapReserve;
+      XFA_RectWithoutMargin(&m_CaptionRect, captionMargin);
+      m_UIRect.height -= fCapReserve;
+      m_UIRect.top += fCapReserve;
       break;
     }
     case XFA_AttributeValue::Right: {
-      m_rtCaption.left = m_rtCaption.right() - fCapReserve;
-      m_rtCaption.width = fCapReserve;
+      m_CaptionRect.left = m_CaptionRect.right() - fCapReserve;
+      m_CaptionRect.width = fCapReserve;
       CapLeftRightPlacement(captionMargin);
-      m_rtUI.width -= fCapReserve;
+      m_UIRect.width -= fCapReserve;
       break;
     }
     case XFA_AttributeValue::Bottom: {
-      m_rtCaption.top = m_rtCaption.bottom() - fCapReserve;
-      m_rtCaption.height = fCapReserve;
-      XFA_RectWithoutMargin(&m_rtCaption, captionMargin);
-      m_rtUI.height -= fCapReserve;
+      m_CaptionRect.top = m_CaptionRect.bottom() - fCapReserve;
+      m_CaptionRect.height = fCapReserve;
+      XFA_RectWithoutMargin(&m_CaptionRect, captionMargin);
+      m_UIRect.height -= fCapReserve;
       break;
     }
     case XFA_AttributeValue::Inline:
@@ -162,26 +169,26 @@ bool CXFA_FFCheckButton::PerformLayout() {
   }
 
   if (iHorzAlign == XFA_AttributeValue::Center)
-    m_rtUI.left += (m_rtUI.width - fCheckSize) / 2;
+    m_UIRect.left += (m_UIRect.width - fCheckSize) / 2;
   else if (iHorzAlign == XFA_AttributeValue::Right)
-    m_rtUI.left = m_rtUI.right() - fCheckSize;
+    m_UIRect.left = m_UIRect.right() - fCheckSize;
 
   if (iVertAlign == XFA_AttributeValue::Middle)
-    m_rtUI.top += (m_rtUI.height - fCheckSize) / 2;
+    m_UIRect.top += (m_UIRect.height - fCheckSize) / 2;
   else if (iVertAlign == XFA_AttributeValue::Bottom)
-    m_rtUI.top = m_rtUI.bottom() - fCheckSize;
+    m_UIRect.top = m_UIRect.bottom() - fCheckSize;
 
-  m_rtUI.width = fCheckSize;
-  m_rtUI.height = fCheckSize;
+  m_UIRect.width = fCheckSize;
+  m_UIRect.height = fCheckSize;
   AddUIMargin(iCapPlacement);
-  m_rtCheckBox = m_rtUI;
+  m_CheckBoxRect = m_UIRect;
   CXFA_Border* borderUI = m_pNode->GetUIBorder();
   if (borderUI) {
     CXFA_Margin* borderMargin = borderUI->GetMarginIfExists();
-    XFA_RectWithoutMargin(&m_rtUI, borderMargin);
+    XFA_RectWithoutMargin(&m_UIRect, borderMargin);
   }
 
-  m_rtUI.Normalize();
+  m_UIRect.Normalize();
   LayoutCaption();
   SetFWLRect();
   if (GetNormalWidget())
@@ -192,40 +199,40 @@ bool CXFA_FFCheckButton::PerformLayout() {
 
 void CXFA_FFCheckButton::CapLeftRightPlacement(
     const CXFA_Margin* captionMargin) {
-  XFA_RectWithoutMargin(&m_rtCaption, captionMargin);
-  if (m_rtCaption.height < 0)
-    m_rtCaption.top += m_rtCaption.height;
-  if (m_rtCaption.width < 0) {
-    m_rtCaption.left += m_rtCaption.width;
-    m_rtCaption.width = -m_rtCaption.width;
+  XFA_RectWithoutMargin(&m_CaptionRect, captionMargin);
+  if (m_CaptionRect.height < 0)
+    m_CaptionRect.top += m_CaptionRect.height;
+  if (m_CaptionRect.width < 0) {
+    m_CaptionRect.left += m_CaptionRect.width;
+    m_CaptionRect.width = -m_CaptionRect.width;
   }
 }
 
 void CXFA_FFCheckButton::AddUIMargin(XFA_AttributeValue iCapPlacement) {
   CFX_RectF rtUIMargin = m_pNode->GetUIMargin();
-  m_rtUI.top -= rtUIMargin.top / 2 - rtUIMargin.height / 2;
+  m_UIRect.top -= rtUIMargin.top / 2 - rtUIMargin.height / 2;
 
   float fLeftAddRight = rtUIMargin.left + rtUIMargin.width;
   float fTopAddBottom = rtUIMargin.top + rtUIMargin.height;
-  if (m_rtUI.width < fLeftAddRight) {
+  if (m_UIRect.width < fLeftAddRight) {
     if (iCapPlacement == XFA_AttributeValue::Right ||
         iCapPlacement == XFA_AttributeValue::Left) {
-      m_rtUI.left -= fLeftAddRight - m_rtUI.width;
+      m_UIRect.left -= fLeftAddRight - m_UIRect.width;
     } else {
-      m_rtUI.left -= 2 * (fLeftAddRight - m_rtUI.width);
+      m_UIRect.left -= 2 * (fLeftAddRight - m_UIRect.width);
     }
-    m_rtUI.width += 2 * (fLeftAddRight - m_rtUI.width);
+    m_UIRect.width += 2 * (fLeftAddRight - m_UIRect.width);
   }
-  if (m_rtUI.height < fTopAddBottom) {
+  if (m_UIRect.height < fTopAddBottom) {
     if (iCapPlacement == XFA_AttributeValue::Right)
-      m_rtUI.left -= fTopAddBottom - m_rtUI.height;
+      m_UIRect.left -= fTopAddBottom - m_UIRect.height;
 
-    m_rtUI.top -= fTopAddBottom - m_rtUI.height;
-    m_rtUI.height += 2 * (fTopAddBottom - m_rtUI.height);
+    m_UIRect.top -= fTopAddBottom - m_UIRect.height;
+    m_UIRect.height += 2 * (fTopAddBottom - m_UIRect.height);
   }
 }
 
-void CXFA_FFCheckButton::RenderWidget(CXFA_Graphics* pGS,
+void CXFA_FFCheckButton::RenderWidget(CFGAS_GEGraphics* pGS,
                                       const CFX_Matrix& matrix,
                                       HighlightOption highlight) {
   if (!HasVisibleStatus())
@@ -235,54 +242,52 @@ void CXFA_FFCheckButton::RenderWidget(CXFA_Graphics* pGS,
   mtRotate.Concat(matrix);
 
   CXFA_FFWidget::RenderWidget(pGS, mtRotate, highlight);
-  DrawBorderWithFlag(pGS, m_pNode->GetUIBorder(), m_rtUI, mtRotate,
+  DrawBorderWithFlag(pGS, m_pNode->GetUIBorder(), m_UIRect, mtRotate,
                      button_->IsRound());
-  RenderCaption(pGS, &mtRotate);
-  DrawHighlight(pGS, &mtRotate, highlight,
+  RenderCaption(pGS, mtRotate);
+  DrawHighlight(pGS, mtRotate, highlight,
                 button_->IsRound() ? kRoundShape : kSquareShape);
-  CFX_Matrix mt(1, 0, 0, 1, m_rtCheckBox.left, m_rtCheckBox.top);
+  CFX_Matrix mt(1, 0, 0, 1, m_CheckBoxRect.left, m_CheckBoxRect.top);
   mt.Concat(mtRotate);
   GetApp()->GetFWLWidgetMgr()->OnDrawWidget(GetNormalWidget(), pGS, mt);
 }
 
-bool CXFA_FFCheckButton::OnLButtonUp(uint32_t dwFlags,
+bool CXFA_FFCheckButton::OnLButtonUp(Mask<XFA_FWL_KeyFlag> dwFlags,
                                      const CFX_PointF& point) {
   if (!GetNormalWidget() || !IsButtonDown())
     return false;
 
-  ObservedPtr<CXFA_FFCheckButton> pWatched(this);
   SetButtonDown(false);
-  SendMessageToFWLWidget(pdfium::MakeUnique<CFWL_MessageMouse>(
-      GetNormalWidget(), FWL_MouseCommand::LeftButtonUp, dwFlags,
-      FWLToClient(point)));
-
-  return !!pWatched;
+  CFWL_MessageMouse msg(GetNormalWidget(),
+                        CFWL_MessageMouse::MouseCommand::kLeftButtonUp, dwFlags,
+                        FWLToClient(point));
+  SendMessageToFWLWidget(&msg);
+  return true;
 }
 
-XFA_CHECKSTATE CXFA_FFCheckButton::FWLState2XFAState() {
+XFA_CheckState CXFA_FFCheckButton::FWLState2XFAState() {
   uint32_t dwState = GetNormalWidget()->GetStates();
   if (dwState & FWL_STATE_CKB_Checked)
-    return XFA_CHECKSTATE_On;
+    return XFA_CheckState::kOn;
   if (dwState & FWL_STATE_CKB_Neutral)
-    return XFA_CHECKSTATE_Neutral;
-  return XFA_CHECKSTATE_Off;
+    return XFA_CheckState::kNeutral;
+  return XFA_CheckState::kOff;
 }
 
 bool CXFA_FFCheckButton::CommitData() {
-  XFA_CHECKSTATE eCheckState = FWLState2XFAState();
-  m_pNode->SetCheckState(eCheckState, true);
+  m_pNode->SetCheckState(FWLState2XFAState());
   return true;
 }
 
 bool CXFA_FFCheckButton::IsDataChanged() {
-  XFA_CHECKSTATE eCheckState = FWLState2XFAState();
+  XFA_CheckState eCheckState = FWLState2XFAState();
   return m_pNode->GetCheckState() != eCheckState;
 }
 
-void CXFA_FFCheckButton::SetFWLCheckState(XFA_CHECKSTATE eCheckState) {
-  if (eCheckState == XFA_CHECKSTATE_Neutral)
+void CXFA_FFCheckButton::SetFWLCheckState(XFA_CheckState eCheckState) {
+  if (eCheckState == XFA_CheckState::kNeutral)
     GetNormalWidget()->SetStates(FWL_STATE_CKB_Neutral);
-  else if (eCheckState == XFA_CHECKSTATE_On)
+  else if (eCheckState == XFA_CheckState::kOn)
     GetNormalWidget()->SetStates(FWL_STATE_CKB_Checked);
   else
     GetNormalWidget()->RemoveStates(FWL_STATE_CKB_Checked);
@@ -292,8 +297,7 @@ bool CXFA_FFCheckButton::UpdateFWLData() {
   if (!GetNormalWidget())
     return false;
 
-  XFA_CHECKSTATE eState = m_pNode->GetCheckState();
-  SetFWLCheckState(eState);
+  SetFWLCheckState(m_pNode->GetCheckState());
   GetNormalWidget()->Update();
   return true;
 }
@@ -308,29 +312,25 @@ void CXFA_FFCheckButton::OnProcessEvent(CFWL_Event* pEvent) {
     case CFWL_Event::Type::CheckStateChanged: {
       CXFA_EventParam eParam;
       eParam.m_eType = XFA_EVENT_Change;
-      eParam.m_wsPrevText = m_pNode->GetValue(XFA_VALUEPICTURE_Raw);
+      eParam.m_wsPrevText = m_pNode->GetValue(XFA_ValuePicture::kRaw);
 
       CXFA_Node* exclNode = m_pNode->GetExclGroupIfExists();
       if (ProcessCommittedData()) {
-        eParam.m_pTarget = exclNode;
         if (exclNode) {
           m_pDocView->AddValidateNode(exclNode);
           m_pDocView->AddCalculateNode(exclNode);
           exclNode->ProcessEvent(GetDocView(), XFA_AttributeValue::Change,
                                  &eParam);
         }
-        eParam.m_pTarget = m_pNode.Get();
         m_pNode->ProcessEvent(GetDocView(), XFA_AttributeValue::Change,
                               &eParam);
       } else {
         SetFWLCheckState(m_pNode->GetCheckState());
       }
       if (exclNode) {
-        eParam.m_pTarget = exclNode;
         exclNode->ProcessEvent(GetDocView(), XFA_AttributeValue::Click,
                                &eParam);
       }
-      eParam.m_pTarget = m_pNode.Get();
       m_pNode->ProcessEvent(GetDocView(), XFA_AttributeValue::Click, &eParam);
       break;
     }
@@ -340,7 +340,7 @@ void CXFA_FFCheckButton::OnProcessEvent(CFWL_Event* pEvent) {
   m_pOldDelegate->OnProcessEvent(pEvent);
 }
 
-void CXFA_FFCheckButton::OnDrawWidget(CXFA_Graphics* pGraphics,
+void CXFA_FFCheckButton::OnDrawWidget(CFGAS_GEGraphics* pGraphics,
                                       const CFX_Matrix& matrix) {
   m_pOldDelegate->OnDrawWidget(pGraphics, matrix);
 }
