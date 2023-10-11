@@ -1,14 +1,10 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "core/fxcodec/jbig2/JBig2_BitStream.h"
 
-#include <memory>
-#include <utility>
-
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/base/ptr_util.h"
 
 TEST(JBig2_BitStream, ReadNBits) {
   const uint8_t kData[] = {0xb1};  // 10110001

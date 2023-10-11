@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,12 @@
 #ifndef CORE_FPDFAPI_PAGE_CPDF_PAGEOBJECT_H_
 #define CORE_FPDFAPI_PAGE_CPDF_PAGEOBJECT_H_
 
+#include <stdint.h>
+
 #include "core/fpdfapi/page/cpdf_contentmarks.h"
 #include "core/fpdfapi/page/cpdf_graphicstates.h"
+#include "core/fxcrt/bytestring.h"
 #include "core/fxcrt/fx_coordinates.h"
-#include "core/fxcrt/fx_system.h"
 
 class CPDF_FormObject;
 class CPDF_ImageObject;
@@ -18,14 +20,18 @@ class CPDF_PathObject;
 class CPDF_ShadingObject;
 class CPDF_TextObject;
 
+// Represents an object within the page, like a form or image. Not to be
+// confused with the PDF spec's page object that lives in a page tree, which is
+// represented by CPDF_Page.
 class CPDF_PageObject : public CPDF_GraphicStates {
  public:
-  enum Type {
-    TEXT = 1,
-    PATH,
-    IMAGE,
-    SHADING,
-    FORM,
+  // Values must match corresponding values in //public.
+  enum class Type {
+    kText = 1,
+    kPath,
+    kImage,
+    kShading,
+    kForm,
   };
 
   static constexpr int32_t kNoContentStream = -1;
@@ -58,10 +64,18 @@ class CPDF_PageObject : public CPDF_GraphicStates {
   void TransformClipPath(const CFX_Matrix& matrix);
   void TransformGeneralState(const CFX_Matrix& matrix);
 
+  void SetOriginalRect(const CFX_FloatRect& rect) { m_OriginalRect = rect; }
+  const CFX_FloatRect& GetOriginalRect() const { return m_OriginalRect; }
   void SetRect(const CFX_FloatRect& rect) { m_Rect = rect; }
   const CFX_FloatRect& GetRect() const { return m_Rect; }
   FX_RECT GetBBox() const;
   FX_RECT GetTransformedBBox(const CFX_Matrix& matrix) const;
+
+  CPDF_ContentMarks* GetContentMarks() { return &m_ContentMarks; }
+  const CPDF_ContentMarks* GetContentMarks() const { return &m_ContentMarks; }
+  void SetContentMarks(const CPDF_ContentMarks& marks) {
+    m_ContentMarks = marks;
+  }
 
   // Get what content stream the object was parsed from in its page. This number
   // is the index of the content stream in the "Contents" array, or 0 if there
@@ -75,16 +89,29 @@ class CPDF_PageObject : public CPDF_GraphicStates {
     m_ContentStream = new_content_stream;
   }
 
-  CPDF_ContentMarks m_ContentMarks;
+  const ByteString& GetResourceName() const { return m_ResourceName; }
+  void SetResourceName(const ByteString& resource_name) {
+    m_ResourceName = resource_name;
+  }
+
+  const ByteString& GetGraphicsResourceName() const {
+    return m_GraphicsResourceName;
+  }
+  void SetGraphicsResourceName(const ByteString& resource_name) {
+    m_GraphicsResourceName = resource_name;
+  }
 
  protected:
   void CopyData(const CPDF_PageObject* pSrcObject);
 
-  CFX_FloatRect m_Rect;
-
  private:
+  CFX_FloatRect m_Rect;
+  CFX_FloatRect m_OriginalRect;
+  CPDF_ContentMarks m_ContentMarks;
   bool m_bDirty = false;
   int32_t m_ContentStream;
+  ByteString m_ResourceName;          // The resource name for this object.
+  ByteString m_GraphicsResourceName;  // Like `m_ResourceName` but for graphics.
 };
 
 #endif  // CORE_FPDFAPI_PAGE_CPDF_PAGEOBJECT_H_

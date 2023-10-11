@@ -1,4 +1,4 @@
-// Copyright 2018 PDFium Authors. All rights reserved.
+// Copyright 2018 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,16 @@
 #ifndef CORE_FXCODEC_BMP_CFX_BMPDECOMPRESSOR_H_
 #define CORE_FXCODEC_BMP_CFX_BMPDECOMPRESSOR_H_
 
+#include <stdint.h>
+
 #include <vector>
 
-#include "core/fxcodec/bmp/bmpmodule.h"
+#include "core/fxcodec/bmp/bmp_decoder.h"
 #include "core/fxcodec/bmp/fx_bmp.h"
+#include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/retain_ptr.h"
 #include "core/fxcrt/unowned_ptr.h"
+#include "third_party/base/span.h"
 
 class CFX_CodecMemory;
 
@@ -22,11 +26,11 @@ class CFX_BmpContext;
 
 class CFX_BmpDecompressor {
  public:
-  explicit CFX_BmpDecompressor(CFX_BmpContext* context);
+  explicit CFX_BmpDecompressor(const CFX_BmpContext* context);
   ~CFX_BmpDecompressor();
 
-  BmpModule::Status DecodeImage();
-  BmpModule::Status ReadHeader();
+  BmpDecoder::Status DecodeImage();
+  BmpDecoder::Status ReadHeader();
   void SetInputBuffer(RetainPtr<CFX_CodecMemory> codec_memory);
   FX_FILESIZE GetAvailInput() const;
 
@@ -48,24 +52,27 @@ class CFX_BmpDecompressor {
     kTail,
   };
 
-  BmpModule::Status ReadBmpHeader();
-  BmpModule::Status ReadBmpHeaderIfh();
-  BmpModule::Status ReadBmpHeaderDimensions();
-  BmpModule::Status ReadBmpBitfields();
-  BmpModule::Status ReadBmpPalette();
+  enum class PalType : bool { kNew, kOld };
+
+  BmpDecoder::Status ReadBmpHeader();
+  BmpDecoder::Status ReadBmpHeaderIfh();
+  BmpDecoder::Status ReadBmpHeaderDimensions();
+  BmpDecoder::Status ReadBmpBitfields();
+  BmpDecoder::Status ReadBmpPalette();
   bool GetDataPosition(uint32_t cur_pos);
   void ReadNextScanline();
-  BmpModule::Status DecodeRGB();
-  BmpModule::Status DecodeRLE8();
-  BmpModule::Status DecodeRLE4();
-  bool ReadData(uint8_t* destination, uint32_t size);
+  BmpDecoder::Status DecodeRGB();
+  BmpDecoder::Status DecodeRLE8();
+  BmpDecoder::Status DecodeRLE4();
+  bool ReadAllOrNone(pdfium::span<uint8_t> buf);
   void SaveDecodingStatus(DecodeStatus status);
   bool ValidateColorIndex(uint8_t val) const;
   bool ValidateFlag() const;
   bool SetHeight(int32_t signed_height);
+  int PaletteChannelCount() const { return pal_type_ == PalType::kNew ? 4 : 3; }
 
-  UnownedPtr<CFX_BmpContext> const context_;
-  std::vector<uint8_t> out_row_buffer_;
+  UnownedPtr<const CFX_BmpContext> const context_;
+  DataVector<uint8_t> out_row_buffer_;
   std::vector<uint32_t> palette_;
   uint32_t header_offset_ = 0;
   uint32_t width_ = 0;
@@ -78,7 +85,8 @@ class CFX_BmpDecompressor {
   uint16_t bit_counts_ = 0;
   uint32_t color_used_ = 0;
   int32_t pal_num_ = 0;
-  int32_t pal_type_ = 0;
+  PalType pal_type_ = PalType::kNew;
+  uint32_t data_offset_ = 0;
   uint32_t data_size_ = 0;
   uint32_t img_ifh_size_ = 0;
   uint32_t row_num_ = 0;

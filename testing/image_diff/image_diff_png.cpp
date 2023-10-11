@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,8 +16,7 @@
 
 #include <string>
 
-#include "third_party/base/compiler_specific.h"
-#include "third_party/base/logging.h"
+#include "third_party/base/notreached.h"
 
 #ifdef USE_SYSTEM_ZLIB
 #include <zlib.h>
@@ -28,7 +27,7 @@
 #ifdef USE_SYSTEM_LIBPNG
 #include <png.h>
 #else
-#include "third_party/libpng16/png.h"
+#include "third_party/libpng/png.h"
 #endif
 
 namespace image_diff_png {
@@ -92,12 +91,12 @@ void ConvertRGBAtoRGB(const uint8_t* rgba,
                       int pixel_width,
                       uint8_t* rgb,
                       bool* is_opaque) {
+  const uint8_t* pixel_in = rgba;
+  uint8_t* pixel_out = rgb;
   for (int x = 0; x < pixel_width; x++) {
-    const uint8_t* pixel_in = &rgba[x * 4];
-    uint8_t* pixel_out = &rgb[x * 3];
-    pixel_out[0] = pixel_in[0];
-    pixel_out[1] = pixel_in[1];
-    pixel_out[2] = pixel_in[2];
+    memcpy(pixel_out, pixel_in, 3);
+    pixel_in += 4;
+    pixel_out += 3;
   }
 }
 
@@ -148,13 +147,13 @@ void ConvertRGBtoRGBA(const uint8_t* rgb,
                       int pixel_width,
                       uint8_t* rgba,
                       bool* is_opaque) {
+  const uint8_t* pixel_in = rgb;
+  uint8_t* pixel_out = rgba;
   for (int x = 0; x < pixel_width; x++) {
-    const uint8_t* pixel_in = &rgb[x * 3];
-    uint8_t* pixel_out = &rgba[x * 4];
-    pixel_out[0] = pixel_in[0];
-    pixel_out[1] = pixel_in[1];
-    pixel_out[2] = pixel_in[2];
+    memcpy(pixel_out, pixel_in, 3);
     pixel_out[3] = 0xff;
+    pixel_in += 3;
+    pixel_out += 4;
   }
 }
 
@@ -428,7 +427,7 @@ void ConvertBGRAtoRGB(const uint8_t* bgra,
 #ifdef PNG_TEXT_SUPPORTED
 
 inline char* strdup(const char* str) {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   return _strdup(str);
 #else
   return ::strdup(str);
@@ -461,11 +460,11 @@ class CommentWriter {
   void AddComment(size_t pos, const Comment& comment) {
     png_text_[pos].compression = PNG_TEXT_COMPRESSION_NONE;
     // A PNG comment's key can only be 79 characters long.
-    if (comment.key.length() > 79)
+    if (comment.key.size() > 79)
       return;
     png_text_[pos].key = strdup(comment.key.substr(0, 78).c_str());
     png_text_[pos].text = strdup(comment.text.c_str());
-    png_text_[pos].text_length = comment.text.length();
+    png_text_[pos].text_length = comment.text.size();
 #ifdef PNG_iTXt_SUPPORTED
     png_text_[pos].itxt_length = 0;
     png_text_[pos].lang = 0;
@@ -571,7 +570,7 @@ std::vector<uint8_t> EncodeWithCompressionLevel(
   switch (format) {
     case FORMAT_BGR:
       converter = ConvertBGRtoRGB;
-      FALLTHROUGH;
+      [[fallthrough]];
 
     case FORMAT_RGB:
       input_color_components = 3;

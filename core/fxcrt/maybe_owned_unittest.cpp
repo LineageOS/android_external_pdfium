@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 
 #include "core/fxcrt/unowned_ptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/base/ptr_util.h"
 
 namespace fxcrt {
 namespace {
@@ -32,7 +31,7 @@ TEST(MaybeOwned, Null) {
   MaybeOwned<PseudoDeletable> ptr1;
   EXPECT_FALSE(ptr1.IsOwned());
   EXPECT_FALSE(ptr1);
-  EXPECT_EQ(nullptr, ptr1.Get());
+  EXPECT_FALSE(ptr1.Get());
 
   MaybeOwned<PseudoDeletable> ptr2;
   EXPECT_TRUE(ptr1 == ptr2);
@@ -72,7 +71,7 @@ TEST(MaybeOwned, NotOwned) {
   {
     MaybeOwned<PseudoDeletable> ptr(&thing1);
     EXPECT_EQ(100, ptr->GetID());
-    ptr = pdfium::MakeUnique<PseudoDeletable>(300, &owned_delete_count);
+    ptr = std::make_unique<PseudoDeletable>(300, &owned_delete_count);
     EXPECT_TRUE(ptr.IsOwned());
     EXPECT_EQ(300, ptr->GetID());
   }
@@ -99,7 +98,7 @@ TEST(MaybeOwned, Owned) {
   int delete_count = 0;
   {
     MaybeOwned<PseudoDeletable> ptr(
-        pdfium::MakeUnique<PseudoDeletable>(100, &delete_count));
+        std::make_unique<PseudoDeletable>(100, &delete_count));
     EXPECT_TRUE(ptr.IsOwned());
     EXPECT_EQ(100, ptr->GetID());
 
@@ -112,8 +111,8 @@ TEST(MaybeOwned, Owned) {
   delete_count = 0;
   {
     MaybeOwned<PseudoDeletable> ptr(
-        pdfium::MakeUnique<PseudoDeletable>(200, &delete_count));
-    ptr = pdfium::MakeUnique<PseudoDeletable>(300, &delete_count);
+        std::make_unique<PseudoDeletable>(200, &delete_count));
+    ptr = std::make_unique<PseudoDeletable>(300, &delete_count);
     EXPECT_TRUE(ptr.IsOwned());
     EXPECT_EQ(300, ptr->GetID());
     EXPECT_EQ(1, delete_count);
@@ -125,7 +124,7 @@ TEST(MaybeOwned, Owned) {
   PseudoDeletable thing2(400, &unowned_delete_count);
   {
     MaybeOwned<PseudoDeletable> ptr(
-        pdfium::MakeUnique<PseudoDeletable>(500, &delete_count));
+        std::make_unique<PseudoDeletable>(500, &delete_count));
     ptr = &thing2;
     EXPECT_FALSE(ptr.IsOwned());
     EXPECT_EQ(400, ptr->GetID());
@@ -142,7 +141,7 @@ TEST(MaybeOwned, Release) {
     std::unique_ptr<PseudoDeletable> stolen;
     {
       MaybeOwned<PseudoDeletable> ptr(
-          pdfium::MakeUnique<PseudoDeletable>(100, &delete_count));
+          std::make_unique<PseudoDeletable>(100, &delete_count));
       EXPECT_TRUE(ptr.IsOwned());
       stolen = ptr.Release();
       EXPECT_FALSE(ptr.IsOwned());
@@ -160,19 +159,19 @@ TEST(MaybeOwned, Move) {
   {
     MaybeOwned<PseudoDeletable> ptr1(&thing1);
     MaybeOwned<PseudoDeletable> ptr2(
-        pdfium::MakeUnique<PseudoDeletable>(200, &delete_count));
+        std::make_unique<PseudoDeletable>(200, &delete_count));
     EXPECT_FALSE(ptr1.IsOwned());
     EXPECT_TRUE(ptr2.IsOwned());
 
     MaybeOwned<PseudoDeletable> ptr3(std::move(ptr1));
     MaybeOwned<PseudoDeletable> ptr4(std::move(ptr2));
-    EXPECT_FALSE(ptr1.IsOwned());
-    EXPECT_FALSE(ptr2.IsOwned());
+    EXPECT_FALSE(ptr1.IsOwned());  // Unowned and null.
+    EXPECT_FALSE(ptr1.Get());
+    EXPECT_TRUE(ptr2.IsOwned());  // Owned but null.
+    EXPECT_FALSE(ptr2.Get());
     EXPECT_FALSE(ptr3.IsOwned());
     EXPECT_TRUE(ptr4.IsOwned());
     EXPECT_EQ(0, delete_count);
-    EXPECT_EQ(nullptr, ptr1.Get());
-    EXPECT_EQ(nullptr, ptr2.Get());
     EXPECT_EQ(100, ptr3->GetID());
     EXPECT_EQ(200, ptr4->GetID());
 
@@ -180,17 +179,55 @@ TEST(MaybeOwned, Move) {
     MaybeOwned<PseudoDeletable> ptr6;
     ptr5 = std::move(ptr3);
     ptr6 = std::move(ptr4);
-    EXPECT_FALSE(ptr3.IsOwned());
-    EXPECT_FALSE(ptr4.IsOwned());
+    EXPECT_FALSE(ptr3.IsOwned());  // Unowned and null.
+    EXPECT_FALSE(ptr3.Get());
+    EXPECT_TRUE(ptr4.IsOwned());  // Owned but null.
+    EXPECT_FALSE(ptr4.Get());
     EXPECT_FALSE(ptr5.IsOwned());
     EXPECT_TRUE(ptr6.IsOwned());
     EXPECT_EQ(0, delete_count);
-    EXPECT_EQ(nullptr, ptr3.Get());
-    EXPECT_EQ(nullptr, ptr4.Get());
     EXPECT_EQ(100, ptr5->GetID());
     EXPECT_EQ(200, ptr6->GetID());
   }
   EXPECT_EQ(1, delete_count);
+}
+
+namespace {
+
+class Thing {
+ public:
+  int x = 42;
+};
+
+class Owner {
+ public:
+  explicit Owner(std::unique_ptr<Thing> thing) : thing_(std::move(thing)) {}
+
+ private:
+  std::unique_ptr<Thing> thing_;
+};
+
+class Manager {
+ public:
+  Manager()
+      : transient_(std::make_unique<Thing>()),
+        owner_(std::make_unique<Owner>(transient_.Release())),
+        thing_(std::move(transient_).Get()) {}
+
+  bool has_transient() const { return !!transient_.Get(); }
+
+ private:
+  MaybeOwned<Thing> transient_;         // For initializng next two members.
+  const std::unique_ptr<Owner> owner_;  // Must outlive thing_.
+  const UnownedPtr<Thing> thing_;
+};
+
+}  // namespace
+
+TEST(MaybeOwned, MoveElisionThwarted) {
+  // Test fails if the std::move() in Manager::Manager() is elided.
+  Manager manager;
+  EXPECT_FALSE(manager.has_transient());
 }
 
 }  // namespace fxcrt

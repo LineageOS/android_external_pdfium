@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ class CXFA_Occur;
 
 class CJX_Occur final : public CJX_Node {
  public:
-  explicit CJX_Occur(CXFA_Occur* node);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CJX_Occur() override;
 
   // CJX_Object:
@@ -24,6 +24,8 @@ class CJX_Occur final : public CJX_Node {
   JSE_PROP(min);
 
  private:
+  explicit CJX_Occur(CXFA_Occur* node);
+
   using Type__ = CJX_Occur;
   using ParentType__ = CJX_Node;
 

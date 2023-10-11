@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,11 @@
 
 #include "xfa/fwl/cfwl_messagemousewheel.h"
 
-#include <memory>
-
-#include "third_party/base/ptr_util.h"
-
-CFWL_MessageMouseWheel::CFWL_MessageMouseWheel(CFWL_Widget* pDstTarget,
-                                               uint32_t flags,
-                                               CFX_PointF pos,
-                                               CFX_PointF delta)
-    : CFWL_Message(CFWL_Message::Type::MouseWheel, nullptr, pDstTarget),
-      m_dwFlags(flags),
-      m_pos(pos),
-      m_delta(delta) {}
+CFWL_MessageMouseWheel::CFWL_MessageMouseWheel(CFWL_Widget* destination,
+                                               const CFX_PointF& pos,
+                                               const CFX_Vector& delta)
+    : CFWL_Message(CFWL_Message::Type::kMouseWheel, destination),
+      pos_(pos),
+      delta_(delta) {}
 
 CFWL_MessageMouseWheel::~CFWL_MessageMouseWheel() = default;

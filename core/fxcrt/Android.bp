@@ -11,7 +11,7 @@ cc_library_static {
     name: "libpdfium-fxcrt",
     defaults: ["pdfium-core"],
 
-    visibility: ["//external/pdfium:__subpackages__"],
+    visibility: ["//external/pdfium:__subpackages__", "//cts/hostsidetests/securitybulletin/securityPatch/CVE-2016-8332"],
 
     export_shared_lib_headers: [
         "libicu",
@@ -28,8 +28,13 @@ cc_library_static {
     exclude_srcs: [
         // is_win
         "cfx_fileaccess_windows.cpp",
+        "fx_folder_windows.cpp",
         // pdf_enable_xfa
         "cfx_memorystream.cpp",
+        // pdf_use_partition_alloc
+        "fx_memory_pa.cpp",
+        // test module
+        "fake_time_test.cpp",
     ],
 
     srcs: [

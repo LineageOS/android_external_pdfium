@@ -23,6 +23,7 @@ endobj
   /Contents [21 0 R]
   /MediaBox [0 0 612 792]
 >>
+endobj
 % OpenAction action
 {{object 10 0}} <<
   /Type /Action
@@ -30,7 +31,7 @@ endobj
   /JS 11 0 R
 >>
 endobj
-% JS program to exexute
+% JS program to execute
 {{object 11 0}} <<
   {{streamlen}}
 >>
@@ -58,7 +59,11 @@ var props_to_test = [
 
   // Test null and undefined.
   { "name": "null_var", "value": null },
-  { "name": "undefined_var", "value": undefined }
+  { "name": "undefined_var", "value": undefined },
+
+  // Test to show unicode currently handled.
+  { "name": "unicode_var", "value": "\u4025\u4026_string" },
+  { "name": "\u4025\u4026_var", "value": "string" },
 ];
 
 function setup_global() {

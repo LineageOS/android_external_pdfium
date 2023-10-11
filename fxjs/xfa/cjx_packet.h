@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ class CXFA_Packet;
 
 class CJX_Packet final : public CJX_Node {
  public:
-  explicit CJX_Packet(CXFA_Packet* packet);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CJX_Packet() override;
 
   // CJX_Object:
@@ -27,6 +27,8 @@ class CJX_Packet final : public CJX_Node {
   JSE_PROP(content);
 
  private:
+  explicit CJX_Packet(CXFA_Packet* packet);
+
   using Type__ = CJX_Packet;
   using ParentType__ = CJX_Node;
 

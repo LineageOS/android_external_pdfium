@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,21 @@
 
 #include "xfa/fxfa/parser/cxfa_radial.h"
 
+#include <math.h>
+
 #include <utility>
 
-#include "core/fxge/render_defines.h"
 #include "fxjs/xfa/cjx_node.h"
-#include "third_party/base/ptr_util.h"
+#include "xfa/fgas/graphics/cfgas_gegraphics.h"
+#include "xfa/fgas/graphics/cfgas_geshading.h"
 #include "xfa/fxfa/parser/cxfa_color.h"
-#include "xfa/fxgraphics/cxfa_geshading.h"
+#include "xfa/fxfa/parser/cxfa_document.h"
 
 namespace {
 
 const CXFA_Node::PropertyData kRadialPropertyData[] = {
-    {XFA_Element::Color, 1, 0},
-    {XFA_Element::Extras, 1, 0},
+    {XFA_Element::Color, 1, {}},
+    {XFA_Element::Extras, 1, {}},
 };
 
 const CXFA_Node::AttributeData kRadialAttributeData[] = {
@@ -34,12 +36,14 @@ const CXFA_Node::AttributeData kRadialAttributeData[] = {
 CXFA_Radial::CXFA_Radial(CXFA_Document* doc, XFA_PacketType packet)
     : CXFA_Node(doc,
                 packet,
-                (XFA_XDPPACKET_Template | XFA_XDPPACKET_Form),
+                {XFA_XDPPACKET::kTemplate, XFA_XDPPACKET::kForm},
                 XFA_ObjectType::Node,
                 XFA_Element::Radial,
                 kRadialPropertyData,
                 kRadialAttributeData,
-                pdfium::MakeUnique<CJX_Node>(this)) {}
+                cppgc::MakeGarbageCollected<CJX_Node>(
+                    doc->GetHeap()->GetAllocationHandle(),
+                    this)) {}
 
 CXFA_Radial::~CXFA_Radial() = default;
 
@@ -52,8 +56,8 @@ CXFA_Color* CXFA_Radial::GetColorIfExists() {
   return GetChild<CXFA_Color>(0, XFA_Element::Color, false);
 }
 
-void CXFA_Radial::Draw(CXFA_Graphics* pGS,
-                       CXFA_GEPath* fillPath,
+void CXFA_Radial::Draw(CFGAS_GEGraphics* pGS,
+                       const CFGAS_GEPath& fillPath,
                        FX_ARGB crStart,
                        const CFX_RectF& rtFill,
                        const CFX_Matrix& matrix) {
@@ -62,14 +66,11 @@ void CXFA_Radial::Draw(CXFA_Graphics* pGS,
   if (!IsToEdge())
     std::swap(crStart, crEnd);
 
-  float endRadius = sqrt(rtFill.Width() * rtFill.Width() +
-                         rtFill.Height() * rtFill.Height()) /
-                    2;
-  CXFA_GEShading shading(rtFill.Center(), rtFill.Center(), 0, endRadius, true,
-                         true, crStart, crEnd);
+  float end_radius = FXSYS_sqrt2(rtFill.Width(), rtFill.Height()) / 2;
+  CFGAS_GEShading shading(rtFill.Center(), rtFill.Center(), 0, end_radius, true,
+                          true, crStart, crEnd);
 
-  pGS->SaveGraphState();
-  pGS->SetFillColor(CXFA_GEColor(&shading));
-  pGS->FillPath(fillPath, FXFILL_WINDING, &matrix);
-  pGS->RestoreGraphState();
+  CFGAS_GEGraphics::StateRestorer restorer(pGS);
+  pGS->SetFillColor(CFGAS_GEColor(&shading));
+  pGS->FillPath(fillPath, CFX_FillRenderOptions::FillType::kWinding, matrix);
 }

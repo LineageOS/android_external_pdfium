@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,12 +14,10 @@
 
 class CPDFSDK_FileWriteAdapter final : public IFX_RetainableWriteStream {
  public:
-  template <typename T, typename... Args>
-  friend RetainPtr<T> pdfium::MakeRetain(Args&&... args);
+  CONSTRUCT_VIA_MAKE_RETAIN;
 
   // IFX_WriteStream:
-  bool WriteBlock(const void* data, size_t size) override;
-  bool WriteString(ByteStringView str) override;
+  bool WriteBlock(pdfium::span<const uint8_t> buffer) override;
 
  private:
   explicit CPDFSDK_FileWriteAdapter(FPDF_FILEWRITE* file_write);

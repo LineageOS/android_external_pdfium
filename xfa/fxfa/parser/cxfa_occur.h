@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@ class CXFA_Occur final : public CXFA_Node {
   static constexpr int32_t kDefaultMax = 1;
   static constexpr int32_t kDefaultMin = 1;
 
-  CXFA_Occur(CXFA_Document* doc, XFA_PacketType packet);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_Occur() override;
 
   int32_t GetMax();
@@ -26,6 +26,9 @@ class CXFA_Occur final : public CXFA_Node {
   void SetMin(int32_t iMin);
 
   std::tuple<int32_t, int32_t, int32_t> GetOccurInfo();
+
+ private:
+  CXFA_Occur(CXFA_Document* doc, XFA_PacketType packet);
 };
 
 #endif  // XFA_FXFA_PARSER_CXFA_OCCUR_H_

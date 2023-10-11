@@ -1,4 +1,4 @@
-// Copyright 2015 PDFium Authors. All rights reserved.
+// Copyright 2015 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@
 #include "core/fxcodec/jbig2/JBig2_ArithDecoder.h"
 #include "core/fxcodec/jbig2/JBig2_BitStream.h"
 #include "core/fxcodec/jbig2/JBig2_Image.h"
-#include "third_party/base/ptr_util.h"
 
 CJBig2_GRRDProc::CJBig2_GRRDProc() = default;
 
@@ -21,7 +20,7 @@ std::unique_ptr<CJBig2_Image> CJBig2_GRRDProc::Decode(
     CJBig2_ArithDecoder* pArithDecoder,
     JBig2ArithCtx* grContext) {
   if (!CJBig2_Image::IsValidImageSize(GRW, GRH))
-    return pdfium::MakeUnique<CJBig2_Image>(GRW, GRH);
+    return std::make_unique<CJBig2_Image>(GRW, GRH);
 
   if (!GRTEMPLATE) {
     if ((GRAT[0] == -1) && (GRAT[1] == -1) && (GRAT[2] == -1) &&
@@ -41,11 +40,11 @@ std::unique_ptr<CJBig2_Image> CJBig2_GRRDProc::Decode(
 std::unique_ptr<CJBig2_Image> CJBig2_GRRDProc::DecodeTemplate0Unopt(
     CJBig2_ArithDecoder* pArithDecoder,
     JBig2ArithCtx* grContext) {
-  auto GRREG = pdfium::MakeUnique<CJBig2_Image>(GRW, GRH);
+  auto GRREG = std::make_unique<CJBig2_Image>(GRW, GRH);
   if (!GRREG->data())
     return nullptr;
 
-  GRREG->Fill(0);
+  GRREG->Fill(false);
   int LTP = 0;
   for (uint32_t h = 0; h < GRH; h++) {
     if (TPGRON) {
@@ -149,7 +148,7 @@ std::unique_ptr<CJBig2_Image> CJBig2_GRRDProc::DecodeTemplate0Opt(
 
   int32_t iGRW = static_cast<int32_t>(GRW);
   int32_t iGRH = static_cast<int32_t>(GRH);
-  auto GRREG = pdfium::MakeUnique<CJBig2_Image>(iGRW, iGRH);
+  auto GRREG = std::make_unique<CJBig2_Image>(iGRW, iGRH);
   if (!GRREG->data())
     return nullptr;
 
@@ -282,11 +281,11 @@ std::unique_ptr<CJBig2_Image> CJBig2_GRRDProc::DecodeTemplate0Opt(
 std::unique_ptr<CJBig2_Image> CJBig2_GRRDProc::DecodeTemplate1Unopt(
     CJBig2_ArithDecoder* pArithDecoder,
     JBig2ArithCtx* grContext) {
-  auto GRREG = pdfium::MakeUnique<CJBig2_Image>(GRW, GRH);
+  auto GRREG = std::make_unique<CJBig2_Image>(GRW, GRH);
   if (!GRREG->data())
     return nullptr;
 
-  GRREG->Fill(0);
+  GRREG->Fill(false);
   int LTP = 0;
   for (uint32_t h = 0; h < GRH; h++) {
     if (TPGRON) {
@@ -396,7 +395,7 @@ std::unique_ptr<CJBig2_Image> CJBig2_GRRDProc::DecodeTemplate1Opt(
 
   int32_t iGRW = static_cast<int32_t>(GRW);
   int32_t iGRH = static_cast<int32_t>(GRH);
-  auto GRREG = pdfium::MakeUnique<CJBig2_Image>(iGRW, iGRH);
+  auto GRREG = std::make_unique<CJBig2_Image>(iGRW, iGRH);
   if (!GRREG->data())
     return nullptr;
 

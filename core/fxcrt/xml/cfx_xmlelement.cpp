@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,14 @@
 
 #include "core/fxcrt/xml/cfx_xmlelement.h"
 
-#include <utility>
-
-#include "core/fxcrt/cfx_widetextbuf.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/xml/cfx_xmlchardata.h"
 #include "core/fxcrt/xml/cfx_xmldocument.h"
 #include "core/fxcrt/xml/cfx_xmltext.h"
+#include "third_party/base/check.h"
 
 CFX_XMLElement::CFX_XMLElement(const WideString& wsTag) : name_(wsTag) {
-  ASSERT(!name_.IsEmpty());
+  DCHECK(!name_.IsEmpty());
 }
 
 CFX_XMLElement::~CFX_XMLElement() = default;
@@ -69,24 +67,24 @@ WideString CFX_XMLElement::GetNamespaceURI() const {
 }
 
 WideString CFX_XMLElement::GetTextData() const {
-  CFX_WideTextBuf buffer;
+  WideString buffer;
   for (CFX_XMLNode* pChild = GetFirstChild(); pChild;
        pChild = pChild->GetNextSibling()) {
     CFX_XMLText* pText = ToXMLText(pChild);
     if (pText)
-      buffer << pText->GetText();
+      buffer += pText->GetText();
   }
-  return buffer.MakeString();
+  return buffer;
 }
 
 void CFX_XMLElement::Save(
-    const RetainPtr<IFX_SeekableWriteStream>& pXMLStream) {
+    const RetainPtr<IFX_RetainableWriteStream>& pXMLStream) {
   ByteString bsNameEncoded = name_.ToUTF8();
 
   pXMLStream->WriteString("<");
   pXMLStream->WriteString(bsNameEncoded.AsStringView());
 
-  for (auto it : attrs_) {
+  for (const auto& it : attrs_) {
     // Note, the space between attributes is added by AttributeToString which
     // writes a blank as the first character.
     pXMLStream->WriteString(
@@ -150,7 +148,7 @@ WideString CFX_XMLElement::AttributeToString(const WideString& name,
   WideString ret = L" ";
   ret += name;
   ret += L"=\"";
-  ret += EncodeEntities(value);
+  ret += value.EncodeEntities();
   ret += L"\"";
   return ret;
 }
