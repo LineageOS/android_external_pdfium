@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,9 @@
 
 class CXFA_CheckButton final : public CXFA_Node {
  public:
-  CXFA_CheckButton(CXFA_Document* doc, XFA_PacketType packet);
+  static CXFA_CheckButton* FromNode(CXFA_Node* pNode);
+
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_CheckButton() override;
 
   XFA_FFWidgetType GetDefaultFFWidgetType() const override;
@@ -19,6 +21,9 @@ class CXFA_CheckButton final : public CXFA_Node {
   bool IsRound();
   bool IsAllowNeutral();
   XFA_AttributeValue GetMark();
+
+ private:
+  CXFA_CheckButton(CXFA_Document* doc, XFA_PacketType packet);
 };
 
 #endif  // XFA_FXFA_PARSER_CXFA_CHECKBUTTON_H_

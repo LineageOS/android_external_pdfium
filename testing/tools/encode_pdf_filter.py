@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2019 The PDFium Authors. All rights reserved.
+# Copyright 2019 The PDFium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Encodes binary data using one or more PDF stream filters.
@@ -13,6 +13,7 @@ manually-run script.
 """
 
 import argparse
+from abc import ABCMeta, abstractmethod
 import base64
 import collections
 import collections.abc
@@ -21,9 +22,21 @@ import sys
 import zlib
 
 
-class _PdfStream:
+class _PdfStream(metaclass=ABCMeta):
   _unique_filter_classes = []
   _filter_classes = {}
+
+  @classmethod
+  @property
+  @abstractmethod
+  def name(cls):
+    pass
+
+  @classmethod
+  @property
+  @abstractmethod
+  def aliases(cls):
+    pass
 
   @staticmethod
   def GetFilterByName(name):
@@ -38,18 +51,24 @@ class _PdfStream:
 
     return filter_class
 
-  @staticmethod
-  def RegisterFilter(filter_class):
-    assert filter_class not in _PdfStream._unique_filter_classes
-    _PdfStream._unique_filter_classes.append(filter_class)
+  @classmethod
+  def Register(cls):
+    assert cls not in _PdfStream._unique_filter_classes
+    _PdfStream._unique_filter_classes.append(cls)
+    cls.RegisterByName()
+    cls.RegisterByAliases()
 
-    assert filter_class.name[0] == '/'
-    lower_name = filter_class.name.lower()
-    _PdfStream._filter_classes[lower_name] = filter_class
-    _PdfStream._filter_classes[lower_name[1:]] = filter_class
+  @classmethod
+  def RegisterByName(cls):
+    assert cls.name[0] == '/'
+    lower_name = cls.name.lower()
+    _PdfStream._filter_classes[lower_name] = cls
+    _PdfStream._filter_classes[lower_name[1:]] = cls
 
-    for alias in filter_class.aliases:
-      _PdfStream._filter_classes[alias.lower()] = filter_class
+  @classmethod
+  def RegisterByAliases(cls):
+    for alias in cls.aliases:
+      _PdfStream._filter_classes[alias.lower()] = cls
 
   @staticmethod
   def GetHelp():
@@ -58,6 +77,21 @@ class _PdfStream:
       text += '  {} (aliases: {})\n'.format(filter_class.name,
                                             ', '.join(filter_class.aliases))
     return text
+
+  @classmethod
+  def AddEntries(cls, entries):
+    _PdfStream.AddListEntry(entries, 'Filter', cls.name)
+
+  @staticmethod
+  def AddListEntry(entries, key, value):
+    old_value = entries.get(key)
+    if old_value is None:
+      entries[key] = value
+    else:
+      if not isinstance(old_value, collections.abc.MutableSequence):
+        old_value = [old_value]
+        entries[key] = old_value
+      old_value.append(value)
 
   def __init__(self, out_buffer, **kwargs):
     del kwargs
@@ -78,6 +112,22 @@ class _SinkPdfStream(_PdfStream):
   def __init__(self):
     super().__init__(io.BytesIO())
 
+  @classmethod
+  @property
+  def name(cls):
+    # Return an invalid name, so as to ensure _SinkPdfStream.Register()
+    # cannot be called. This method has to be implemented, because this
+    # script create `_SinkPdfStream` instances.
+    return ''
+
+  @classmethod
+  @property
+  def aliases(cls):
+    # Return an invalid aliases, so as to ensure _SinkPdfStream.Register()
+    # cannot be called. This method has to be implemented, because this
+    # script create `_SinkPdfStream` instances.
+    return ()
+
   def close(self):
     # Don't call io.BytesIO.close(); this deallocates the written data.
     self.flush()
@@ -92,6 +142,18 @@ class _AsciiPdfStream(_PdfStream):
     super().__init__(out_buffer, **kwargs)
     self.wrapcol = wrapcol
     self.column = 0
+
+  @classmethod
+  @property
+  @abstractmethod
+  def name(cls):
+    pass
+
+  @classmethod
+  @property
+  @abstractmethod
+  def aliases(cls):
+    pass
 
   def write(self, data):
     if not self.wrapcol:
@@ -113,8 +175,18 @@ class _AsciiPdfStream(_PdfStream):
 
 
 class _Ascii85DecodePdfStream(_AsciiPdfStream):
-  name = '/ASCII85Decode'
-  aliases = ('ascii85', 'base85')
+  _name = '/ASCII85Decode'
+  _aliases = ('ascii85', 'base85')
+
+  @classmethod
+  @property
+  def name(cls):
+    return cls._name
+
+  @classmethod
+  @property
+  def aliases(cls):
+    return cls._aliases
 
   def __init__(self, out_buffer, **kwargs):
     super().__init__(out_buffer, **kwargs)
@@ -137,8 +209,18 @@ class _Ascii85DecodePdfStream(_AsciiPdfStream):
 
 
 class _AsciiHexDecodePdfStream(_AsciiPdfStream):
-  name = '/ASCIIHexDecode'
-  aliases = ('base16', 'hex', 'hexadecimal')
+  _name = '/ASCIIHexDecode'
+  _aliases = ('base16', 'hex', 'hexadecimal')
+
+  @classmethod
+  @property
+  def name(cls):
+    return cls._name
+
+  @classmethod
+  @property
+  def aliases(cls):
+    return cls._aliases
 
   def __init__(self, out_buffer, **kwargs):
     super().__init__(out_buffer, **kwargs)
@@ -148,12 +230,22 @@ class _AsciiHexDecodePdfStream(_AsciiPdfStream):
 
 
 class _FlateDecodePdfStream(_PdfStream):
-  name = '/FlateDecode'
-  aliases = ('deflate', 'flate', 'zlib')
+  _name = '/FlateDecode'
+  _aliases = ('deflate', 'flate', 'zlib')
 
   def __init__(self, out_buffer, **kwargs):
     super().__init__(out_buffer, **kwargs)
     self.deflate = zlib.compressobj(level=9, memLevel=9)
+
+  @classmethod
+  @property
+  def name(cls):
+    return cls._name
+
+  @classmethod
+  @property
+  def aliases(cls):
+    return cls._aliases
 
   def write(self, data):
     self.buffer.write(self.deflate.compress(data))
@@ -166,9 +258,126 @@ class _FlateDecodePdfStream(_PdfStream):
     self.buffer.close()
 
 
-_PdfStream.RegisterFilter(_Ascii85DecodePdfStream)
-_PdfStream.RegisterFilter(_AsciiHexDecodePdfStream)
-_PdfStream.RegisterFilter(_FlateDecodePdfStream)
+class _VirtualPdfStream(_PdfStream):
+
+  @classmethod
+  @property
+  @abstractmethod
+  def name(cls):
+    pass
+
+  @classmethod
+  @property
+  @abstractmethod
+  def aliases(cls):
+    pass
+
+  @classmethod
+  def RegisterByName(cls):
+    pass
+
+  @classmethod
+  def AddEntries(cls, entries):
+    pass
+
+
+class _PassthroughPdfStream(_VirtualPdfStream):
+  _name = '(virtual) passthrough'
+  _aliases = ('noop', 'passthrough')
+
+  @classmethod
+  @property
+  def name(cls):
+    return cls._name
+
+  @classmethod
+  @property
+  def aliases(cls):
+    return cls._aliases
+
+
+class _PngIdatPdfStream(_VirtualPdfStream):
+  _name = '(virtual) PNG IDAT'
+  _aliases = ('png',)
+
+  _EXPECT_HEADER = -1
+  _EXPECT_LENGTH = -2
+  _EXPECT_CHUNK_TYPE = -3
+  _EXPECT_CRC = -4
+
+  _PNG_HEADER = 0x89504E470D0A1A0A
+  _PNG_CHUNK_IDAT = 0x49444154
+
+  @classmethod
+  @property
+  def name(cls):
+    return cls._name
+
+  @classmethod
+  @property
+  def aliases(cls):
+    return cls._aliases
+
+  @classmethod
+  def AddEntries(cls, entries):
+    # Technically only true for compression method 0 (zlib), but no other
+    # methods have been standardized.
+    _PdfStream.AddListEntry(entries, 'Filter', '/FlateDecode')
+
+  def __init__(self, out_buffer, **kwargs):
+    super().__init__(out_buffer, **kwargs)
+    self.chunk = _PngIdatPdfStream._EXPECT_HEADER
+    self.remaining = 8
+    self.accumulator = 0
+    self.length = 0
+
+  def write(self, data):
+    position = 0
+    while position < len(data):
+      if self.chunk >= 0:
+        # Only pass through IDAT chunk data.
+        read_size = min(self.remaining, len(data) - position)
+        if self.chunk == _PngIdatPdfStream._PNG_CHUNK_IDAT:
+          self.buffer.write(data[position:position + read_size])
+        self.remaining -= read_size
+        if self.remaining == 0:
+          self.ResetAccumulator(_PngIdatPdfStream._EXPECT_CRC, 4)
+        position += read_size
+      else:
+        # As far as we're concerned, PNG files are just a header followed by a
+        # series of (length, chunk type, data[length], CRC) chunks.
+        if self.AccumulateByte(data[position]):
+          if self.chunk == _PngIdatPdfStream._EXPECT_HEADER:
+            if self.accumulator != _PngIdatPdfStream._PNG_HEADER:
+              raise ValueError('Invalid PNG header', self.accumulator)
+            self.ResetAccumulator(_PngIdatPdfStream._EXPECT_LENGTH, 4)
+          elif self.chunk == _PngIdatPdfStream._EXPECT_LENGTH:
+            self.length = self.accumulator
+            self.ResetAccumulator(_PngIdatPdfStream._EXPECT_CHUNK_TYPE, 4)
+          elif self.chunk == _PngIdatPdfStream._EXPECT_CHUNK_TYPE:
+            self.ResetAccumulator(self.accumulator, self.length)
+          elif self.chunk == _PngIdatPdfStream._EXPECT_CRC:
+            # Don't care if the CRC is correct.
+            self.ResetAccumulator(_PngIdatPdfStream._EXPECT_LENGTH, 4)
+        position += 1
+
+  def ResetAccumulator(self, chunk, remaining):
+    self.chunk = chunk
+    self.remaining = remaining
+    self.accumulator = 0
+
+  def AccumulateByte(self, byte):
+    assert self.remaining > 0
+    self.accumulator = self.accumulator << 8 | byte
+    self.remaining -= 1
+    return self.remaining == 0
+
+
+_Ascii85DecodePdfStream.Register()
+_AsciiHexDecodePdfStream.Register()
+_FlateDecodePdfStream.Register()
+_PassthroughPdfStream.Register()
+_PngIdatPdfStream.Register()
 
 _DEFAULT_FILTERS = (_Ascii85DecodePdfStream, _FlateDecodePdfStream)
 
@@ -261,7 +470,7 @@ def _WritePdfStreamObject(out_buffer,
 
 
 def _EncodePdfValue(value):
-  if isinstance(value, collections.abc.Sequence):
+  if isinstance(value, collections.abc.MutableSequence):
     value = '[' + ' '.join(value) + ']'
   return value
 
@@ -276,7 +485,8 @@ def main(argv):
     out_buffer.close()
 
   entries = collections.OrderedDict()
-  entries['Filter'] = [f.name for f in args.filter]
+  for f in args.filter:
+    f.AddEntries(entries)
   _WritePdfStreamObject(
       args.outfile.buffer,
       data=encoded_sink.getbuffer(),

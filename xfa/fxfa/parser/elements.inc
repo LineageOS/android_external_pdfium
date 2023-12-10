@@ -1,4 +1,4 @@
-// Copyright 2018 PDFium Authors. All rights reserved.
+// Copyright 2018 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -316,7 +316,7 @@ ELEM____(0xffffffffu, "eventPseudoModel", EventPseudoModel, Object)
 ELEM____(0xffffffffu, "hostPseudoModel", HostPseudoModel, Object)
 ELEM____(0xffffffffu, "layoutPseudoModel", LayoutPseudoModel, Object)
 ELEM____(0xffffffffu, "dataWindow", DataWindow, Object)
-ELEM____(0xffffffffu, "treeList,", TreeList, ListDuplicate)
+ELEM____(0xffffffffu, "treeList", TreeList, ListDuplicate)
 ELEM____(0xffffffffu, "logPseudoModel", LogPseudoModel, Object)
 ELEM____(0xffffffffu, "list", List, ListDuplicate)
 ELEM____(0xffffffffu, "object", Object, Unknown)

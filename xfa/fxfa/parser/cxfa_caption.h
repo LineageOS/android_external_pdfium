@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,7 @@ class CXFA_Caption final : public CXFA_Node {
   static constexpr XFA_AttributeValue kDefaultPlacementType =
       XFA_AttributeValue::Left;
 
-  CXFA_Caption(CXFA_Document* doc, XFA_PacketType packet);
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CXFA_Caption() override;
 
   bool IsVisible();
@@ -28,6 +28,9 @@ class CXFA_Caption final : public CXFA_Node {
   CXFA_Margin* GetMarginIfExists();
   CXFA_Font* GetFontIfExists();
   CXFA_Value* GetValueIfExists();
+
+ private:
+  CXFA_Caption(CXFA_Document* doc, XFA_PacketType packet);
 };
 
 #endif  // XFA_FXFA_PARSER_CXFA_CAPTION_H_

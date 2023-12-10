@@ -1,4 +1,4 @@
-// Copyright 2018 The PDFium Authors. All rights reserved.
+// Copyright 2018 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,7 @@
 #include "public/fpdfview.h"
 
 #ifdef PDF_ENABLE_SKIA
-#include "third_party/skia/include/core/SkPictureRecorder.h"
-#include "third_party/skia/include/core/SkStream.h"
+class SkPicture;
 #endif
 
 std::string WritePpm(const char* pdf_name,
@@ -20,7 +19,7 @@ std::string WritePpm(const char* pdf_name,
                      int stride,
                      int width,
                      int height);
-void WriteText(FPDF_PAGE page, const char* pdf_name, int num);
+void WriteText(FPDF_TEXTPAGE textpage, const char* pdf_name, int num);
 void WriteAnnot(FPDF_PAGE page, const char* pdf_name, int num);
 std::string WritePng(const char* pdf_name,
                      int num,
@@ -41,13 +40,15 @@ void WritePS(FPDF_PAGE page, const char* pdf_name, int num);
 #endif  // _WIN32
 
 #ifdef PDF_ENABLE_SKIA
-std::string WriteSkp(const char* pdf_name,
-                     int num,
-                     SkPictureRecorder* recorder);
+std::string WriteSkp(const char* pdf_name, int num, const SkPicture& picture);
 #endif  // PDF_ENABLE_SKIA
 
 void WriteAttachments(FPDF_DOCUMENT doc, const std::string& name);
 void WriteImages(FPDF_PAGE page, const char* pdf_name, int page_num);
+void WriteRenderedImages(FPDF_DOCUMENT doc,
+                         FPDF_PAGE page,
+                         const char* pdf_name,
+                         int page_num);
 void WriteDecodedThumbnailStream(FPDF_PAGE page,
                                  const char* pdf_name,
                                  int page_num);

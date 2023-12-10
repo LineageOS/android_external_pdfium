@@ -1,4 +1,4 @@
-// Copyright 2016 PDFium Authors. All rights reserved.
+// Copyright 2016 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,12 @@
 
 #include "core/fpdfapi/render/cpdf_type3glyphmap.h"
 
+#include <math.h>
+
 #include <algorithm>
-#include <map>
 #include <utility>
 
+#include "core/fxcrt/fx_system.h"
 #include "core/fxge/cfx_glyphbitmap.h"
 #include "core/fxge/fx_font.h"
 
@@ -39,7 +41,7 @@ int AdjustBlueHelper(float pos, std::vector<int>* blues) {
 
 CPDF_Type3GlyphMap::CPDF_Type3GlyphMap() {}
 
-CPDF_Type3GlyphMap::~CPDF_Type3GlyphMap() {}
+CPDF_Type3GlyphMap::~CPDF_Type3GlyphMap() = default;
 
 std::pair<int, int> CPDF_Type3GlyphMap::AdjustBlue(float top, float bottom) {
   return std::make_pair(AdjustBlueHelper(top, &m_TopBlue),

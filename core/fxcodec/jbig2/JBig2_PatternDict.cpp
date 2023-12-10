@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,4 +9,4 @@
 CJBig2_PatternDict::CJBig2_PatternDict(uint32_t dict_size)
     : NUMPATS(dict_size), HDPATS(dict_size) {}
 
-CJBig2_PatternDict::~CJBig2_PatternDict() {}
+CJBig2_PatternDict::~CJBig2_PatternDict() = default;

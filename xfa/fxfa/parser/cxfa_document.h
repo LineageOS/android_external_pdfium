@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,42 @@
 #ifndef XFA_FXFA_PARSER_CXFA_DOCUMENT_H_
 #define XFA_FXFA_PARSER_CXFA_DOCUMENT_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <map>
 #include <memory>
 #include <vector>
 
 #include "core/fxcrt/unowned_ptr.h"
-#include "third_party/base/optional.h"
+#include "core/fxcrt/widestring.h"
+#include "fxjs/gc/heap.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/base/span.h"
+#include "v8/include/cppgc/garbage-collected.h"
+#include "v8/include/cppgc/member.h"
+#include "v8/include/cppgc/persistent.h"
+#include "v8/include/cppgc/visitor.h"
 #include "xfa/fxfa/fxfa.h"
+#include "xfa/fxfa/fxfa_basic.h"
 #include "xfa/fxfa/parser/cxfa_localemgr.h"
 #include "xfa/fxfa/parser/cxfa_nodeowner.h"
+
+class CFXJSE_Engine;
+class CJS_Runtime;
+class CScript_DataWindow;
+class CScript_EventPseudoModel;
+class CScript_HostPseudoModel;
+class CScript_LayoutPseudoModel;
+class CScript_LogPseudoModel;
+class CScript_SignaturePseudoModel;
+class CXFA_FFNotify;
+class CXFA_Node;
+class CXFA_Object;
+
+namespace cppgc {
+class Heap;
+}  // namespace cppgc
 
 enum XFA_VERSION {
   XFA_VERSION_UNKNOWN = 0,
@@ -35,37 +62,29 @@ enum XFA_VERSION {
   XFA_VERSION_MAX = 400,
 };
 
-class CFXJSE_Engine;
-class CJS_Runtime;
-class CScript_DataWindow;
-class CScript_EventPseudoModel;
-class CScript_HostPseudoModel;
-class CScript_LayoutPseudoModel;
-class CScript_LogPseudoModel;
-class CScript_SignaturePseudoModel;
-class CXFA_FFNotify;
-class CXFA_Node;
-class CXFA_Object;
-
-class CXFA_Document final : public CXFA_NodeOwner {
+class CXFA_Document final : public cppgc::GarbageCollected<CXFA_Document> {
  public:
-  class LayoutProcessorIface {
+  class LayoutProcessorIface
+      : public cppgc::GarbageCollected<LayoutProcessorIface> {
    public:
     LayoutProcessorIface();
     virtual ~LayoutProcessorIface();
-    virtual void SetForceRelayout(bool enable) = 0;
-    virtual void AddChangedContainer(CXFA_Node* pContainer) = 0;
+
+    virtual void Trace(cppgc::Visitor* visitor) const;
+    virtual void SetForceRelayout() = 0;
+    virtual void SetHasChangedContainer() = 0;
 
     void SetDocument(CXFA_Document* pDocument) { m_pDocument = pDocument; }
-    CXFA_Document* GetDocument() const { return m_pDocument.Get(); }
+    CXFA_Document* GetDocument() const { return m_pDocument; }
 
    private:
-    UnownedPtr<CXFA_Document> m_pDocument;
+    cppgc::Member<CXFA_Document> m_pDocument;
   };
 
-  CXFA_Document(CXFA_FFNotify* notify,
-                std::unique_ptr<LayoutProcessorIface> pLayout);
-  ~CXFA_Document() override;
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
+  ~CXFA_Document();
+
+  void Trace(cppgc::Visitor* visitor) const;
 
   bool HasScriptContext() const { return !!m_pScriptContext; }
   CFXJSE_Engine* InitScriptContext(CJS_Runtime* fxjs_runtime);
@@ -76,17 +95,18 @@ class CXFA_Document final : public CXFA_NodeOwner {
   // won't have an isolate set into it.
   CFXJSE_Engine* GetScriptContext() const;
 
-  CXFA_FFNotify* GetNotify() const { return notify_.Get(); }
+  CXFA_FFNotify* GetNotify() const { return notify_; }
+  CXFA_NodeOwner* GetNodeOwner() { return node_owner_; }
+  cppgc::Heap* GetHeap() const;
   CXFA_LocaleMgr* GetLocaleMgr();
   CXFA_Object* GetXFAObject(XFA_HashCode wsNodeNameHash);
   CXFA_Node* GetNodeByID(CXFA_Node* pRoot, WideStringView wsID) const;
   CXFA_Node* GetNotBindNode(
-      const std::vector<UnownedPtr<CXFA_Object>>& arrayNodes) const;
+      pdfium::span<cppgc::Member<CXFA_Object>> arrayNodes) const;
 
   LayoutProcessorIface* GetLayoutProcessor() const {
-    return m_pLayoutProcessor.get();
+    return m_pLayoutProcessor;
   }
-
   CXFA_Node* GetRoot() const { return m_pRootNode; }
   void SetRoot(CXFA_Node* pNewRoot) { m_pRootNode = pNewRoot; }
 
@@ -97,7 +117,7 @@ class CXFA_Document final : public CXFA_NodeOwner {
   void set_is_scripting() { m_bScripting = true; }
 
   bool IsInteractive();
-  XFA_VERSION GetCurVersionMode() { return m_eCurVersionMode; }
+  XFA_VERSION GetCurVersionMode() const { return m_eCurVersionMode; }
   XFA_VERSION RecognizeXFAVersionNumber(const WideString& wsTemplateNS);
   FormType GetFormType() const;
 
@@ -105,7 +125,7 @@ class CXFA_Document final : public CXFA_NodeOwner {
 
   void DoProtoMerge();
   void DoDataMerge();
-  void DoDataRemerge(bool bDoDataMerge);
+  void DoDataRemerge();
   CXFA_Node* DataMerge_CopyContainer(CXFA_Node* pTemplateNode,
                                      CXFA_Node* pFormNode,
                                      CXFA_Node* pDataScope,
@@ -118,25 +138,48 @@ class CXFA_Document final : public CXFA_NodeOwner {
 
   CXFA_Node* GetGlobalBinding(uint32_t dwNameHash);
   void RegisterGlobalBinding(uint32_t dwNameHash, CXFA_Node* pDataNode);
+
+  size_t GetPendingNodesCount() const;
+  CXFA_Node* GetPendingNodeAtIndex(size_t index) const;
+  void AppendPendingNode(CXFA_Node* node);
+  void ClearPendingNodes();
   void SetPendingNodesUnusedAndUnbound();
 
-  std::vector<CXFA_Node*> m_pPendingPageSet;
-
  private:
-  UnownedPtr<CXFA_FFNotify> const notify_;
-  CXFA_Node* m_pRootNode = nullptr;
-  std::map<uint32_t, CXFA_Node*> m_rgGlobalBinding;
+  friend class CXFA_DocumentTest_ParseXFAVersion_Test;
+  friend class CXFA_DocumentTest_ParseUseHref_Test;
+  friend class CXFA_DocumentTest_ParseUse_Test;
+
+  static XFA_VERSION ParseXFAVersion(const WideString& wsTemplateNS);
+  static void ParseUseHref(const WideString& wsUseVal,
+                           WideStringView& wsURI,
+                           WideStringView& wsID,
+                           WideStringView& wsSOM);
+  static void ParseUse(const WideString& wsUseVal,
+                       WideStringView& wsID,
+                       WideStringView& wsSOM);
+
+  CXFA_Document(CXFA_FFNotify* notify,
+                cppgc::Heap* heap,
+                LayoutProcessorIface* pLayout);
+
+  UnownedPtr<cppgc::Heap> heap_;
+  cppgc::Member<CXFA_FFNotify> const notify_;
+  cppgc::Member<CXFA_NodeOwner> const node_owner_;
+  cppgc::Member<CXFA_Node> m_pRootNode;
   std::unique_ptr<CFXJSE_Engine> m_pScriptContext;
-  std::unique_ptr<LayoutProcessorIface> m_pLayoutProcessor;
-  std::unique_ptr<CXFA_LocaleMgr> m_pLocaleMgr;
-  std::unique_ptr<CScript_DataWindow> m_pScriptDataWindow;
-  std::unique_ptr<CScript_EventPseudoModel> m_pScriptEvent;
-  std::unique_ptr<CScript_HostPseudoModel> m_pScriptHost;
-  std::unique_ptr<CScript_LogPseudoModel> m_pScriptLog;
-  std::unique_ptr<CScript_LayoutPseudoModel> m_pScriptLayout;
-  std::unique_ptr<CScript_SignaturePseudoModel> m_pScriptSignature;
+  cppgc::Member<LayoutProcessorIface> m_pLayoutProcessor;
+  cppgc::Member<CXFA_LocaleMgr> m_pLocaleMgr;
+  cppgc::Member<CScript_DataWindow> m_pScriptDataWindow;
+  cppgc::Member<CScript_EventPseudoModel> m_pScriptEvent;
+  cppgc::Member<CScript_HostPseudoModel> m_pScriptHost;
+  cppgc::Member<CScript_LogPseudoModel> m_pScriptLog;
+  cppgc::Member<CScript_LayoutPseudoModel> m_pScriptLayout;
+  cppgc::Member<CScript_SignaturePseudoModel> m_pScriptSignature;
+  std::map<uint32_t, cppgc::Member<CXFA_Node>> m_rgGlobalBinding;
+  std::vector<cppgc::Member<CXFA_Node>> m_pPendingPageSet;
   XFA_VERSION m_eCurVersionMode = XFA_VERSION_DEFAULT;
-  Optional<bool> m_Interactive;
+  absl::optional<bool> m_Interactive;
   bool m_bStrictScoping = false;
   bool m_bScripting = false;
 };

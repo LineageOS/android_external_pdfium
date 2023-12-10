@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,39 +9,52 @@
 
 #include <map>
 #include <memory>
-#include <vector>
+#include <set>
 
-#include "core/fxcrt/unowned_ptr.h"
-#include "xfa/fwl/cfwl_event.h"
+#include "fxjs/gc/heap.h"
+#include "v8/include/cppgc/garbage-collected.h"
+#include "v8/include/cppgc/member.h"
+#include "v8/include/cppgc/visitor.h"
+#include "xfa/fgas/graphics/cfgas_gegraphics.h"
 #include "xfa/fwl/cfwl_widget.h"
-#include "xfa/fxgraphics/cxfa_graphics.h"
 
-class CFWL_EventTarget;
-class CFWL_TargetImp;
-class CFWL_Widget;
+class CFWL_Event;
 
-class CFWL_NoteDriver {
+class CFWL_NoteDriver final : public cppgc::GarbageCollected<CFWL_NoteDriver> {
  public:
-  CFWL_NoteDriver();
+  CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
   ~CFWL_NoteDriver();
 
-  void SendEvent(CFWL_Event* pNote);
+  void Trace(cppgc::Visitor* visitor) const;
 
+  void SendEvent(CFWL_Event* pNote);
+  void ProcessMessage(CFWL_Message* pMessage);
   void RegisterEventTarget(CFWL_Widget* pListener, CFWL_Widget* pEventSource);
   void UnregisterEventTarget(CFWL_Widget* pListener);
-  void ClearEventTargets();
-
-  CFWL_Widget* GetFocus() const { return m_pFocus.Get(); }
-  bool SetFocus(CFWL_Widget* pFocus);
-  void SetGrab(CFWL_Widget* pGrab, bool bSet) {
-    m_pGrab = bSet ? pGrab : nullptr;
-  }
-
   void NotifyTargetHide(CFWL_Widget* pNoteTarget);
   void NotifyTargetDestroy(CFWL_Widget* pNoteTarget);
-  void ProcessMessage(std::unique_ptr<CFWL_Message> pMessage);
+  void SetGrab(CFWL_Widget* pGrab) { m_pGrab = pGrab; }
 
  private:
+  class Target : public cppgc::GarbageCollected<Target> {
+   public:
+    explicit Target(CFWL_Widget* pListener);
+    ~Target();
+
+    void Trace(cppgc::Visitor* visitor) const;
+    void SetEventSource(CFWL_Widget* pSource);
+    bool ProcessEvent(CFWL_Event* pEvent);
+    bool IsValid() const { return m_bValid; }
+    void Invalidate() { m_bValid = false; }
+
+   private:
+    bool m_bValid = true;
+    cppgc::Member<CFWL_Widget> const m_pListener;
+    std::set<cppgc::Member<CFWL_Widget>> m_widgets;
+  };
+
+  explicit CFWL_NoteDriver(CFWL_App* pApp);
+
   bool DispatchMessage(CFWL_Message* pMessage, CFWL_Widget* pMessageForm);
   bool DoSetFocus(CFWL_Message* pMsg, CFWL_Widget* pMessageForm);
   bool DoKillFocus(CFWL_Message* pMsg, CFWL_Widget* pMessageForm);
@@ -50,12 +63,12 @@ class CFWL_NoteDriver {
   bool DoWheel(CFWL_Message* pMsg, CFWL_Widget* pMessageForm);
   bool DoMouseEx(CFWL_Message* pMsg, CFWL_Widget* pMessageForm);
   void MouseSecondary(CFWL_Message* pMsg);
-  CFWL_Widget* GetMessageForm(CFWL_Widget* pDstTarget);
 
-  std::map<uint32_t, std::unique_ptr<CFWL_EventTarget>> m_eventTargets;
-  UnownedPtr<CFWL_Widget> m_pHover;
-  UnownedPtr<CFWL_Widget> m_pFocus;
-  UnownedPtr<CFWL_Widget> m_pGrab;
+  cppgc::Member<CFWL_App> m_pApp;
+  std::map<uint64_t, cppgc::Member<Target>> m_eventTargets;
+  cppgc::Member<CFWL_Widget> m_pHover;
+  cppgc::Member<CFWL_Widget> m_pFocus;
+  cppgc::Member<CFWL_Widget> m_pGrab;
 };
 
 #endif  // XFA_FWL_CFWL_NOTEDRIVER_H_

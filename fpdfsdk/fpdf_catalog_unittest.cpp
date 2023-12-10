@@ -1,4 +1,4 @@
-// Copyright 2017 PDFium Authors. All rights reserved.
+// Copyright 2017 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,40 +6,29 @@
 
 #include <memory>
 
-#include "core/fpdfapi/page/cpdf_docpagedata.h"
-#include "core/fpdfapi/page/cpdf_pagemodule.h"
+#include "core/fpdfapi/page/test_with_page_module.h"
 #include "core/fpdfapi/parser/cpdf_dictionary.h"
 #include "core/fpdfapi/parser/cpdf_document.h"
 #include "core/fpdfapi/parser/cpdf_number.h"
 #include "core/fpdfapi/parser/cpdf_parser.h"
 #include "core/fpdfapi/parser/cpdf_string.h"
-#include "core/fpdfapi/render/cpdf_docrenderdata.h"
+#include "core/fpdfapi/parser/cpdf_test_document.h"
 #include "fpdfsdk/cpdfsdk_helpers.h"
 #include "public/cpp/fpdf_scopers.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/base/ptr_util.h"
 
-class CPDF_TestDocument final : public CPDF_Document {
- public:
-  CPDF_TestDocument()
-      : CPDF_Document(pdfium::MakeUnique<CPDF_DocRenderData>(),
-                      pdfium::MakeUnique<CPDF_DocPageData>()) {}
-
-  void SetRoot(CPDF_Dictionary* root) { m_pRootDict.Reset(root); }
-};
-
-class PDFCatalogTest : public testing::Test {
+class PDFCatalogTest : public TestWithPageModule {
  public:
   void SetUp() override {
-    CPDF_PageModule::Create();
-    auto pTestDoc = pdfium::MakeUnique<CPDF_TestDocument>();
+    TestWithPageModule::SetUp();
+    auto pTestDoc = std::make_unique<CPDF_TestDocument>();
     m_pDoc.reset(FPDFDocumentFromCPDFDocument(pTestDoc.release()));
     m_pRootObj = pdfium::MakeRetain<CPDF_Dictionary>();
   }
 
   void TearDown() override {
     m_pDoc.reset();
-    CPDF_PageModule::Destroy();
+    TestWithPageModule::TearDown();
   }
 
  protected:
@@ -59,7 +48,7 @@ TEST_F(PDFCatalogTest, IsTagged) {
   EXPECT_FALSE(FPDFCatalog_IsTagged(m_pDoc.get()));
 
   // Empty root
-  pTestDoc->SetRoot(m_pRootObj.Get());
+  pTestDoc->SetRoot(m_pRootObj);
   EXPECT_FALSE(FPDFCatalog_IsTagged(m_pDoc.get()));
 
   // Root with other key
@@ -67,8 +56,7 @@ TEST_F(PDFCatalogTest, IsTagged) {
   EXPECT_FALSE(FPDFCatalog_IsTagged(m_pDoc.get()));
 
   // Root with empty MarkInfo
-  CPDF_Dictionary* markInfoDict =
-      m_pRootObj->SetNewFor<CPDF_Dictionary>("MarkInfo");
+  auto markInfoDict = m_pRootObj->SetNewFor<CPDF_Dictionary>("MarkInfo");
   EXPECT_FALSE(FPDFCatalog_IsTagged(m_pDoc.get()));
 
   // MarkInfo present but Marked is 0

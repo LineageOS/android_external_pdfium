@@ -1,4 +1,4 @@
-// Copyright 2014 PDFium Authors. All rights reserved.
+// Copyright 2014 The PDFium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,11 +22,15 @@
 
 #include "fxbarcode/datamatrix/BC_ErrorCorrection.h"
 
+#include <stdint.h>
+
 #include <algorithm>
 #include <vector>
 
+#include "core/fxcrt/fixed_zeroed_data_vector.h"
 #include "fxbarcode/datamatrix/BC_Encoder.h"
 #include "fxbarcode/datamatrix/BC_SymbolInfo.h"
+#include "third_party/base/check.h"
 
 namespace {
 
@@ -141,10 +145,10 @@ constexpr uint8_t ALOG[256] = {
     0};
 
 WideString CreateECCBlock(const WideString& codewords, size_t numECWords) {
-  ASSERT(numECWords > 0);
+  DCHECK(numECWords > 0);
 
   const size_t len = codewords.GetLength();
-  static constexpr size_t kFactorTableNum = FX_ArraySize(FACTOR_SETS);
+  static constexpr size_t kFactorTableNum = std::size(FACTOR_SETS);
   size_t table = 0;
   while (table < kFactorTableNum && FACTOR_SETS[table] != numECWords)
     ++table;
@@ -152,30 +156,31 @@ WideString CreateECCBlock(const WideString& codewords, size_t numECWords) {
   if (table >= kFactorTableNum)
     return WideString();
 
-  std::vector<uint16_t> ecc(numECWords);
+  FixedZeroedDataVector<uint16_t> ecc(numECWords);
+  pdfium::span<uint16_t> ecc_span = ecc.writable_span();
   for (size_t i = 0; i < len; ++i) {
-    uint16_t m = ecc[numECWords - 1] ^ codewords[i];
+    uint16_t m = ecc_span[numECWords - 1] ^ codewords[i];
     for (int32_t j = numECWords - 1; j > 0; --j) {
       if (m != 0 && FACTORS[table][j] != 0) {
-        ecc[j] = static_cast<uint16_t>(
-            ecc[j - 1] ^ ALOG[(LOG[m] + LOG[FACTORS[table][j]]) % 255]);
+        ecc_span[j] = static_cast<uint16_t>(
+            ecc_span[j - 1] ^ ALOG[(LOG[m] + LOG[FACTORS[table][j]]) % 255]);
       } else {
-        ecc[j] = ecc[j - 1];
+        ecc_span[j] = ecc_span[j - 1];
       }
     }
     if (m != 0 && FACTORS[table][0] != 0) {
-      ecc[0] =
+      ecc_span[0] =
           static_cast<uint16_t>(ALOG[(LOG[m] + LOG[FACTORS[table][0]]) % 255]);
     } else {
-      ecc[0] = 0;
+      ecc_span[0] = 0;
     }
   }
   WideString strecc;
   strecc.Reserve(numECWords);
   for (size_t i = 0; i < numECWords; ++i)
-    strecc.InsertAtBack(static_cast<wchar_t>(ecc[numECWords - i - 1]));
+    strecc.InsertAtBack(static_cast<wchar_t>(ecc_span[numECWords - i - 1]));
 
-  ASSERT(!strecc.IsEmpty());
+  DCHECK(!strecc.IsEmpty());
   return strecc;
 }
 
@@ -183,13 +188,13 @@ WideString CreateECCBlock(const WideString& codewords, size_t numECWords) {
 
 WideString CBC_ErrorCorrection::EncodeECC200(const WideString& codewords,
                                              const CBC_SymbolInfo* symbolInfo) {
-  if (codewords.GetLength() != symbolInfo->dataCapacity())
+  if (codewords.GetLength() != symbolInfo->data_capacity())
     return WideString();
 
   WideString sb = codewords;
-  size_t blockCount = symbolInfo->getInterleavedBlockCount();
+  size_t blockCount = symbolInfo->GetInterleavedBlockCount();
   if (blockCount == 1) {
-    WideString ecc = CreateECCBlock(codewords, symbolInfo->errorCodewords());
+    WideString ecc = CreateECCBlock(codewords, symbolInfo->error_codewords());
     if (ecc.IsEmpty())
       return WideString();
     sb += ecc;
@@ -198,8 +203,8 @@ WideString CBC_ErrorCorrection::EncodeECC200(const WideString& codewords,
     std::vector<size_t> errorSizes(blockCount);
     std::vector<size_t> startPos(blockCount);
     for (size_t i = 0; i < blockCount; ++i) {
-      dataSizes[i] = symbolInfo->getDataLengthForInterleavedBlock();
-      errorSizes[i] = symbolInfo->getErrorLengthForInterleavedBlock();
+      dataSizes[i] = symbolInfo->GetDataLengthForInterleavedBlock();
+      errorSizes[i] = symbolInfo->GetErrorLengthForInterleavedBlock();
       startPos[i] = i > 0 ? startPos[i - 1] + dataSizes[i] : 0;
     }
 
@@ -211,9 +216,9 @@ WideString CBC_ErrorCorrection::EncodeECC200(const WideString& codewords,
 
     for (size_t block = 0; block < blockCount; ++block) {
       WideString temp;
-      if (symbolInfo->dataCapacity() > block)
-        temp.Reserve((symbolInfo->dataCapacity() - block / blockCount) + 1);
-      for (size_t d = block; d < symbolInfo->dataCapacity(); d += blockCount)
+      if (symbolInfo->data_capacity() > block)
+        temp.Reserve((symbolInfo->data_capacity() - block / blockCount) + 1);
+      for (size_t d = block; d < symbolInfo->data_capacity(); d += blockCount)
         temp.InsertAtBack(static_cast<wchar_t>(codewords[d]));
 
       WideString ecc = CreateECCBlock(temp, errorSizes[block]);
@@ -222,10 +227,10 @@ WideString CBC_ErrorCorrection::EncodeECC200(const WideString& codewords,
 
       for (size_t pos = 0, i = block; i < errorSizes[block] * blockCount;
            ++pos, i += blockCount) {
-        sb.SetAt(symbolInfo->dataCapacity() + i, ecc[pos]);
+        sb.SetAt(symbolInfo->data_capacity() + i, ecc[pos]);
       }
     }
   }
-  ASSERT(!sb.IsEmpty());
+  DCHECK(!sb.IsEmpty());
   return sb;
 }
