@@ -3,13 +3,11 @@ cc_defaults {
     defaults: [
         "pdfium-common"
     ],
-    visibility: ["//external/pdfium:__subpackages__"],
 }
 
 cc_library_static {
     name: "libpdfium-third_party-base",
     defaults: ["pdfium-third-party"],
-    visibility: ["//external/pdfium:__subpackages__"],
 
     arch: {
         arm: {

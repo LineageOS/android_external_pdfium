@@ -2,8 +2,6 @@ cc_library_static {
     name: "libpdfium-fxcodec",
     defaults: ["pdfium-core"],
 
-    visibility: ["//external/pdfium:__subpackages__"],
-
     static_libs: [
         "libpdfium-lcms2",
         "libpdfium-libopenjpeg2",

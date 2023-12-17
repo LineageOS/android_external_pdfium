@@ -2,8 +2,6 @@ cc_library_static {
     name: "libpdfium-render",
     defaults: ["pdfium-core"],
 
-    visibility: ["//external/pdfium:__subpackages__"],
-
     header_libs: [
         "libpdfium-constants",
     ],
