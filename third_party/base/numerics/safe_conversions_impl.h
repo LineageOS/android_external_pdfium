@@ -89,7 +89,11 @@ constexpr typename std::make_unsigned<T>::type SafeUnsignedAbs(T value) {
 
 // TODO(jschuh): Switch to std::is_constant_evaluated() once C++20 is supported.
 // Alternately, the usage could be restructured for "consteval if" in C++23.
-#define IsConstantEvaluated() (__builtin_is_constant_evaluated())
+#if __has_builtin(__builtin_is_constant_evaluated)
+#define IsConstantEvaluated(x) (__builtin_is_constant_evaluated())
+#else
+#define IsConstantEvaluated(x) (__builtin_constant_p(x))
+#endif
 
 // TODO(jschuh): Debug builds don't reliably propagate constants, so we restrict
 // some accelerated runtime paths to release builds until this can be forced
