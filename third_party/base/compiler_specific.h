@@ -69,7 +69,7 @@
 #define TRIVIAL_ABI
 #endif
 
-#if defined(__clang__)
+#if defined(__clang__) && (__clang_major__ >= 10)
 #define GSL_POINTER [[gsl::Pointer]]
 #else
 #define GSL_POINTER
